@@ -1,6 +1,6 @@
 # Глава 17. Разбор примеров
 
-Два канонических примера из `examples/` исходного репозитория, разобранных построчно, с Python-эквивалентами.
+Два канонических примера из `examples/` исходного репозитория, разобранных построчно, с Python-эквивалентами. NB: имена примитивов и функций в QLISP после `intern` хранятся в верхнем регистре (`T+`, `MATMUL!`, `MSE!`, `PARAM`, `GRAD!`), но из-за регистронезависимости вы можете писать их как угодно — книга использует стиль «как есть», для соответствия Lisp-идиому. Все вызовы тензорных функций возвращают тензоры; `!`-операции записывают узлы на autograd-ленту.
 
 ## 17.1 Линейная регрессия: обучение + HLO-инференс
 
@@ -10,42 +10,43 @@
 
 ```lisp
 ;; ----- данные -----
-(defvar x-data (RANDN (list 100 1)))
-(defvar noise (T* (RANDN (list 100 1)) (tensor ((0.2)))))
-(defvar y-data (T+ (T+ (T* x-data (tensor ((2.0)))) (tensor ((1.0)))) noise))
+(defvar x-data (randn (list 100 1)))
+(defvar noise (t* (randn (list 100 1)) (tensor ((0.2)))))
+(defvar y-data (t+ (t+ (t* x-data (tensor ((2.0)))) (tensor ((1.0)))) noise))
 
 ;; ----- параметры -----
-(defvar w (PARAM (RANDN (list 1 1))))
-(defvar b (PARAM (ZEROS (list 1 1))))
+(defvar w (param (randn (list 1 1))))
+(defvar b (param (zeros (list 1 1))))
 (defvar lr 0.02)
 
 ;; ----- forward -----
-(defun predict (x) (T+! (MATMUL! x w) b))
+(defun predict (x) (t+! (matmul! x w) b))
 
 ;; ----- обучение -----
 (defun train-loop (iter max-iter)
   (if (> iter max-iter) nil
     (progn
       (let ((yp (predict x-data))
-            (loss (MSE! yp y-data)))
-        (GRAD! loss)
-        (SGD-STEP w lr)
-        (SGD-STEP b lr)
+            (loss (mse! yp y-data)))
+        (grad! loss)
+        (sgd-step w lr)
+        (sgd-step b lr)
         (if (equal (mod iter 40) 0)
-          (progn (PRINT "epoch") (PRINT iter) (PRINT loss)))
+          (progn (print "epoch") (print iter) (print loss)))
         (train-loop (+ iter 1) max-iter)))))
 
 (train-loop 1 200)
 
 ;; ----- компиляция инференса в HLO -----
-(START-TRACE)
-(defvar dx (GRAPH-PARAM x-test))
-(defvar dw (GRAPH-PARAM w))
-(defvar db (GRAPH-PARAM b))
-(defvar dp (T+ (MATMUL dx dw) db))
+(defvar x-test (randn (list 10 1)))   ;; свежие тестовые данные
+(start-trace)
+(defvar dx (graph-param x-test))
+(defvar dw (graph-param w))
+(defvar db (graph-param b))
+(defvar dp (t+ (matmul dx dw) db))
 
-(defvar hlo (HLO-COMPILE dp))
-(defvar hlo-result (HLO-RUN hlo x-test w b))
+(defvar hlo (hlo-compile dp))
+(defvar hlo-result (hlo-run hlo x-test w b))
 ```
 
 ### Построчный разбор
@@ -56,10 +57,10 @@
 | `w`, `b` | Обучаемые параметры `[1,1]` | `w = nn.Parameter(torch.randn(1,1))` |
 | `predict` | Forward: `x·w + b`. `!`-операции пишут граф | `def predict(x): return x @ w + b` |
 | `train-loop` | Рекурсия-цикл: forward, loss, backward, шаг SGD | `for i in range(200): loss.backward(); opt.step()` |
-| `(GRAD! loss)` | Backward по ленте | `loss.backward()` |
-| `(SGD-STEP w lr)` | Обновление весов на месте | `w -= lr * w.grad` |
-| `(START-TRACE)…(HLO-COMPILE)` | Трассировка forward в граф и компиляция | `compiled = torch.compile(lambda x: x @ w + b)` |
-| `(HLO-RUN hlo ...)` | Нативный инференс | `compiled(x_test)` |
+| `(grad! loss)` | Backward по ленте | `loss.backward()` |
+| `(sgd-step w lr)` | Обновление весов на месте | `w -= lr * w.grad` |
+| `(start-trace)…(hlo-compile)` | Трассировка forward в граф и AOT-компиляция | `compiled = torch.compile(lambda x: x @ w + b)` |
+| `(hlo-run hlo ...)` | Нативный инференс | `compiled(x_test)` |
 
 Обратите внимание: тензоры-константы записываются как `(tensor ((2.0)))` — скаляр в форме `[1,1]`, чтобы избежать сюрпризов broadcasting'а.
 
@@ -73,40 +74,40 @@
 (defvar Y (tensor ((0.0) (1.0) (1.0) (0.0))))
 
 ;; ----- параметры -----
-(defvar w1 (PARAM (RANDN (list 2 4))))
-(defvar b1 (PARAM (ZEROS (list 4))))
-(defvar w2 (PARAM (RANDN (list 4 1))))
-(defvar b2 (PARAM (ZEROS (list 1))))
+(defvar w1 (param (randn (list 2 4))))
+(defvar b1 (param (zeros (list 4))))
+(defvar w2 (param (randn (list 4 1))))
+(defvar b2 (param (zeros (list 1))))
 (defvar lr 0.5)
 
 ;; ----- forward -----
 (defun forward (x)
-  (let ((h (RELU! (T+! (MATMUL! x w1) b1))))
-    (MATMUL! h w2)))
+  (let ((h (relu! (t+! (matmul! x w1) b1))))
+    (matmul! h w2)))
 
 ;; ----- обучение -----
 (defun train-epoch (iter max-iter)
   (if (> iter max-iter) nil
     (progn
-      (let ((loss (MSE! (forward X) Y)))
-        (GRAD! loss)
-        (SGD-STEP w1 lr) (SGD-STEP b1 lr)
-        (SGD-STEP w2 lr) (SGD-STEP b2 lr)
-        (if (equal (mod iter 100) 0) (progn (PRINT "epoch") (PRINT iter) (PRINT loss)))
+      (let ((loss (mse! (forward X) Y)))
+        (grad! loss)
+        (sgd-step w1 lr) (sgd-step b1 lr)
+        (sgd-step w2 lr) (sgd-step b2 lr)
+        (if (equal (mod iter 100) 0) (progn (print "epoch") (print iter) (print loss)))
         (train-epoch (+ iter 1) max-iter)))))
 
 (train-epoch 1 500)
 
 ;; ----- HLO-компиляция инференса -----
-(START-TRACE)
-(defvar dx (GRAPH-PARAM X))
-(defvar w1p (GRAPH-PARAM w1))
-(defvar b1p (GRAPH-PARAM b1))
-(defvar w2p (GRAPH-PARAM w2))
-(defvar h (RELU (T+ (MATMUL dx w1p) b1p)))
-(defvar out (MATMUL h w2p))
-(defvar hlo (HLO-COMPILE out))
-(defvar hlo-pred (HLO-RUN hlo X w1 b1 w2))
+(start-trace)
+(defvar dx (graph-param X))
+(defvar w1p (graph-param w1))
+(defvar b1p (graph-param b1))
+(defvar w2p (graph-param w2))
+(defvar dh (relu (t+ (matmul dx w1p) b1p)))
+(defvar out (matmul dh w2p))
+(defvar hlo (hlo-compile out))
+(defvar hlo-pred (hlo-run hlo X w1 b1 w2))
 ```
 
 ### Python-эквивалент (PyTorch)
@@ -139,15 +140,33 @@ for epoch in range(1, 501):
 
 ### Ключевые различия стилей
 
-1. **Нет `optimizer.zero_grad()`** — лента QLISP очищается в `GRAD!` автоматически.
-2. **Нет `torch.no_grad()`** — разграничение train/inference-операций делается выбором `!`/без-`!`.
-3. **Рекурсия вместо `for`** — идиоматично для Лиспа, `while` тоже доступен.
-4. **HLO-инференс** — отдельный этап: трассировка → компиляция → нативный вызов. В PyTorch это `torch.compile`, в QLISP — язык первого класса.
+1. **Нет `optimizer.zero_grad()`** — лента QLISP очищается в `GRAD!` автоматически (после backward).
+2. **Нет `torch.no_grad()`** — разграничение train/inference-операций делается выбором `!`/без-`!` (`matmul!` vs `matmul`).
+3. **Рекурсия вместо `for`** — идиоматично для Лиспа, `while` тоже доступен (через `while …`).
+4. **HLO-инференс** — отдельный этап: трассировка → компиляция (AOT `llc → g++ -shared → dlopen`) → нативный вызов. В PyTorch это `torch.compile`, в QLISP — язык первого класса.
 
 ## 17.3 Идеи для упражнений
 
-1. Добавьте Adam вместо SGD: `(ADAM-STEP w lr)` и сравните сходимость.
-2. Замените MSE на `CROSS-ENTROPY!` и добавьте `SOFTMAX!` — превратите регрессор в классификатор.
+1. Добавьте Adam вместо SGD: `(adam-step w lr)` и сравните сходимость.
+2. Замените MSE на `cross-entropy!` и добавьте `softmax!` — превратите регрессор в классификатор.
 3. Оберните `predict` в `defuse!` и проверьте, что HLO соберёт всё в один fused-кирнел.
-4. Прогоните датасет через `(CROSS-VAL-SCORE ...)` из модуля ML.
-5. Сохраните обученные веса `(SAVE-NPY w "w.npy")` и постройте их в NumPy.
+4. Прогоните датасет через `(cross-val-score ...)` из модуля ML (гл. 9).
+5. Сохраните обученные веса через `save-npy w "w.npy"` и проверьте их в NumPy.
+
+## 17.4 Расширения: нейросимвольный классификатор (NS-IF)
+
+```lisp
+;; Маршрутизация по символьному правилу: cat/dog
+(defvar router-w (param (randn (list 4 2))))    ;; логиты cat/dog
+
+(defvar router-output (matmul! x router-w))
+
+(defvar pred (ns-if router-output
+  (("cat") (matmul! x cat-net))
+  (("dog") (matmul! x dog-net))))
+
+(defvar loss (mse! pred y-true))
+(ns-grad! loss 'cat)
+```
+
+`NS-IF` выбирает ветвь per-sample, `NS-GRAD!` направляет градиент в виновный сегмент (гл. 14).

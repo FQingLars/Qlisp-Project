@@ -5,13 +5,13 @@
 ### Готовый бинарник (Linux)
 
 ```bash
-curl -L https://github.com/FQingLars/Qlisp-Project/releases/latest/download/qlisp-linux-x86_64 -o qlisp
+curl -L https://github.com/FQingLars/QLISP/releases/latest/download/qlisp-linux-x86_64 -o qlisp
 chmod +x qlisp && mv qlisp ~/.local/bin/
 ```
 
 ### Готовый бинарник (Windows)
 
-Скачайте `qlisp-windows-x86_64.zip` со страницы релизов и распакуйте; `qlisp.exe` готов к работе (MinGW-сборка, x86_64).
+Скачайте `qlisp-windows-x86_64.zip` со страницы релизов и распакуйте; `qlisp.exe`, `qlispc.exe`, `qlisp-lsp.exe`, `qvalent.exe` готовы к работе (MinGW-сборка, x86_64).
 
 ### Сборка из исходников
 
@@ -22,18 +22,20 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-Требования: GCC 13+ / Clang 16+ (C++20), CMake 3.16+, LLVM 22+ (для AOT-компиляции). GPU: CUDA Toolkit (опционально).
+Требования: GCC 13+ / Clang 16+ (C++20), CMake 3.16+, **LLVM 22+** (для AOT-компиляции), OpenBLAS, OpenMP. GPU: CUDA Toolkit (опционально, код присутствует, но не тестирован).
 
-Кросс-компиляция (в т.ч. Windows с Linux-машины через MinGW) описана в README проекта.
+Кросс-компиляция (в т.ч. Windows с Linux-машины через MinGW) описана в `README.md` исходного репозитория (`cmake/x86_64-w64-mingw32.cmake`).
 
 ## 2.2 Четыре инструмента
 
 | Инструмент | Назначение | Python-аналог |
 |---|---|---|
-| `qlisp` | REPL + запуск файлов `.qlsp` | `python` |
+| `qlisp` | REPL + интерпретатор `.qlsp` | `python` |
 | `qlispc` | Компилятор: `.qlsp` → LLVM IR → нативный бинарник | `cython`/`nuitka` |
 | `qlisp-lsp` | Language Server (VS Code, neovim, Emacs) | pylance |
-| `qvalent` | Пакетный менеджер | `pip` |
+| `qvalent` | Пакетный менеджер (`qvalent.toml`) | `pip` |
+
+Все четыре собираются из одних исходников (`CMakeLists.txt` → `BACKEND_SOURCES`); `qlisp-lsp` — отдельная цель только из `src/lsp/server.cpp` (без LLVM-зависимости).
 
 ## 2.3 REPL
 
@@ -50,11 +52,13 @@ Enter expressions, press Ctrl+D to exit.
 => 16.0
 ```
 
-REPL при старте **автоматически загружает все модули стандартной библиотеки** (core, ml, dl, io, regex, audio, datetime, pkg, errors, visual) — они вшиты в бинарник.
+REPL при старте **автоматически загружает все 9 модулей стандартной библиотеки** (см. `embedded_modules[]` в `src/main.cpp`): `core`, `ml`, `io`, `regex`, `audio`, `datetime`, `pkg`, `errors`, `visual`. Они вшиты в бинарник через `cmake/stdlib_embed.cmake` (на этапе сборки `.qlsp` превращаются в `.h` через `xxd -i` и компилируются в бинарник).
 
-> 🐍 **Python-аналогия.** Это как если бы `python` стартовал с предимпортированными `numpy`, `sklearn`, `re`, `datetime`.
+> 🐍 **Python-аналогия.** Это как если бы `python` стартовал с предимпортированными `numpy`, `sklearn`, `re`, `datetime`, `time`, `urllib`, `tensorboard`.
 
-Многострочный ввод работает по скобкам: незакрытый `(` продолжает ввод.
+Многострочный ввод работает по скобкам и кавычкам: незакрытый `(` или незакрытая `"` продолжают ввод.
+
+После каждого выражения REPL вызывает `Interpreter::reset_scratch()` — disposable-область сбрасывается, буферы тензоров и cons-ячейки возвращаются в пулы (гл. 5).
 
 ## 2.4 Запуск файла
 
@@ -73,18 +77,20 @@ Hello, QLISP!
 
 ## 2.5 Импорт модулей
 
-Модули стандартной библиотеки уже загружены в REPL, но в коде принято объявлять импорты явно:
+Модули стандартной библиотеки уже загружены в REPL, но в коде принято объявлять импорты явно (повторный импорт — дешёвый no-op; `Interpreter::mark_module_loaded()`):
 
 ```lisp
-(import ML)       ;; классический ML: KNN, деревья, метрики, кросс-валидация
-(import DL)       ;; глубокое обучение: linear, sequential
-(import IO)       ;; файлы: slurp, spit, read-lines
-(import REGEX)    ;; регулярные выражения: re-find, re-replace
-(import AUDIO)    ;; FFT, STFT, окна, mel-шкала
-(import DATETIME) ;; время: now-ts, sleep, elapsed
-(import PKG)      ;; пакетный менеджер: pkg-install
-(import ERRORS)   ;; ошибки: try, assert
+(import ML)        ;; классический ML: KNN, деревья, метрики, кросс-валидация
+(import IO)        ;; файлы: slurp, spit, read-lines, read-csv
+(import REGEX)     ;; регулярные выражения: re-find, re-replace, re-split
+(import AUDIO)     ;; FFT, STFT, окна, mel-шкала, hz-to-mel
+(import DATETIME)  ;; время: now-ts, now-iso-str, sleep, elapsed
+(import PKG)       ;; пакетный менеджер: pkg-install из GitHub
+(import ERRORS)    ;; ошибки: make-error, throw, assert, try
+(import VISUAL)    ;; дашборд метрик (TensorBoard-подобный HTTP)
 ```
+
+В исходниках есть также модуль `DL` (24 строки в `stdlib/dl.qlsp`: `linear`, `sequential`, `train-step`) — он вшит в бинарник наравне с остальными и доступен через `(import DL)`.
 
 `(import M)` возвращает `"m-loaded"` и гарантирует, что модуль загружен однократно.
 
@@ -93,20 +99,20 @@ Hello, QLISP!
 `qlispc` компилирует файл в LLVM IR, а затем (по умолчанию) в нативный бинарник:
 
 ```bash
-# Нативный бинарник (llc + линковка с рантаймом)
+# Нативный бинарник (LLVM IR → llc → .s → g++ -shared → dlopen)
 qlispc hello.qlsp -o hello
 
 # Только LLVM IR
 qlispc compile --llvm hello.qlsp -o hello.ll
 ```
 
-Полученный `hello` — самодостаточная программа, запускается без интерпретатора.
+Полученный `hello` — самодостаточная программа, запускается без интерпретатора. Линковка идёт с `libqlisp_tensor_runtime.a` (тензорный рантайм, AVX2/FMA/OpenBLAS/OpenMP) и `libqlisp_runtime.a` (C-рантайм для AOT-линковки).
 
-> 🐍 **Python-аналогия.** `qlispc file.qlsp -o prog` ≈ `nuitka --onefile file.py`. А HLO-компиляция тензорных функций (гл. 10) ≈ `torch.compile`.
+> 🐍 **Python-аналогия.** `qlispc file.qlsp -o prog` ≈ `nuitka --onefile file.py`. А HLO-компиляция тензорных функций (гл. 10) ≈ `torch.compile`, только путь — AOT через `llc` + `g++ -shared` + `dlopen`.
 
 ## 2.7 Редактор и LSP
 
-`qlisp-lsp` — Language Server со 150+ автодополнениями, hover-документацией, переходом к определению для `defun`, `defvar`, `defmacro`, `defclass`, `defstruct`, `defhloop`.
+`qlisp-lsp` — Language Server без внешних зависимостей (JSON-парсер встроен в `src/lsp/server.cpp`): автодополнения с hover-документацией, переход к определению для `defun`, `defvar`, `defmacro`, `defclass`, `defstruct`, `defhloop`, `defrule`.
 
 - **VS Code**: любой LSP-клиент, команда запуска `qlisp-lsp`.
 - **neovim**: `nvim-lspconfig` с custom config.
@@ -127,7 +133,7 @@ qlispc compile --llvm hello.qlsp -o hello.ll
     (let ((loss (mse! pred y-data)))   ;; loss
       (grad! loss)                     ;; backward
       (sgd-step w lr)                  ;; обновить веса
-      loss))))
+      loss)))
 
 (defvar epoch 0)
 (while (< epoch 100)
@@ -142,4 +148,6 @@ qlispc compile --llvm hello.qlsp -o hello.ll
 
 - Синтаксис языка целиком — глава 3.
 - Тензоры и автоград — главы 6–7.
+- HLO-компиляция в нативный код — глава 10.
+- Нейросимвольный слой — глава 14.
 - Шпаргалка «QLISP ↔ Python» — глава 18.

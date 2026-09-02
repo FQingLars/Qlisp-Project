@@ -9,6 +9,8 @@
 
 > 🐍 **Python-аналогия.** В PyTorch запись на ленту управляется флагом `requires_grad` тензора. В QLISP — выбором имени операции: `MATMUL` vs `MATMUL!`. Явно, видно в коде, ничего не «сливается» случайно.
 
+Имена autograd-примитивов (из `src/eval/interpreter.cpp:register_primitives`): `T+!`, `T*!`, `MATMUL!`, `RELU!`, `SIGMOID!`, `TANH!`, `SOFTMAX!`, `LOG!`, `EXP!`, `TSIN!`, `TCOS!`, `MSE!`, `CROSS-ENTROPY!`, `CONV2D!`, `MAXPOOL2D!`, `BATCHNORM!`, `LAYERNORM!`, `DROPOUT!`.
+
 ## 7.2 Обучаемые параметры: `PARAM`
 
 ```lisp
@@ -16,7 +18,7 @@
 (defvar b (param (zeros (list 4))))     ;; обучаемое смещение
 ```
 
-`param` — «оберни тензор как обучаемый» ≈ `torch.nn.Parameter(..., requires_grad=True)`.
+`param` (примитив `prim_param`) — оборачивает тензор как `requires_grad=true`. Аналог `torch.nn.Parameter(..., requires_grad=True)`.
 
 ## 7.3 Forward + Backward
 
@@ -35,17 +37,19 @@
     (print (tensor-shape (grad-of w))))))
 ```
 
-- `(grad! loss)` ≈ `loss.backward()` — проход по ленте в обратном порядке, вычисление градиентов всех `PARAM`-тензоров, очистка ленты.
-- `(grad-of w)` ≈ `w.grad`.
+- `(grad! loss)` (примитив `prim_grad_backward`) ≈ `loss.backward()` — проход по ленте в обратном порядке (reverse-topo через `result → producer` карту в `GradientTape`), вычисление градиентов всех `PARAM`-тензоров, очистка ленты.
+- `(grad-of w)` (примитив `prim_grad_of`) ≈ `w.grad`.
+
+Внутри `GradientTape::backward(loss, arena)` идёт по dataflow-графу в reverse-topo порядке (потребители раньше производителей), накапливая `+=` градиенты во `inputs`. `GradNode::inputs` хранит `Tensor*` (не SExpr) — autograd не завязан на интерпретатор (см. `src/tensor/CODE.md`).
 
 ## 7.4 Оптимизаторы
 
 ```lisp
-(sgd-step w 0.01)          ;; w -= lr * grad        (SGD)
-(adam-step w 0.001)        ;; Adam с состоянием m/v на тензоре
+(sgd-step w 0.01)          ;; w -= lr * grad        (SGD) — примитив SGD-STEP
+(adam-step w 0.001)        ;; Adam с состоянием m/v на тензоре — примитив ADAM-STEP
 ```
 
-> 🐍 `(sgd-step w lr)` ≈ `optimizer.step()` для одного параметра. Состояние Adam (`m`, `v`, счётчик шага) хранится прямо на тензоре-параметре.
+> 🐍 `(sgd-step w lr)` ≈ `optimizer.step()` для одного параметра. Состояние Adam (`m`, `v`, счётчик шага) хранится прямо на тензоре-параметре (`Tensor::m`, `Tensor::v`, `Tensor::step`).
 
 Шаг обучения целиком:
 
@@ -68,9 +72,13 @@
 | Loss | `MSE!`, `CROSS-ENTROPY!` |
 | CNN/нормализация | `CONV2D!`, `MAXPOOL2D!`, `DROPOUT!`, `BATCHNORM!`, `LAYERNORM!` |
 | Тригонометрия | `TSIN!`, `TCOS!` |
-| FMA | `T-FMA`, `T-FMA-RELU` |
+| FMA (без ленты, чистые SIMD-кирнелы) | `T-FMA`, `T-FMA-RELU` |
 
-Градиент конкретного узла: `(GRAD-OF tensor)`.
+Градиент конкретного узла: `(GRAD-OF tensor)` (примитив `prim_grad_of`).
+
+Ядро поддерживает и поэлементные autograd-узлы для экспоненты, логарифма и тригонометрии: `EXP!`, `LOG!`, `TSIN!`, `TCOS!`.
+
+Градиенты в половинной точности (`F16`) работают на уровне тензорного слоя: операции и `GRAD!` не требуют промоушена, gradient seed инициализируется в dtype тензора. **HLO-путь остаётся F32-only** (см. `src/tensor/CODE.md`).
 
 ## 7.6 Сравнение с PyTorch
 
@@ -82,6 +90,7 @@
 | `loss.backward()` | `(grad! loss)` |
 | `w.grad` | `(grad-of w)` |
 | `opt.step()` | `(sgd-step w lr)` |
+| `opt = Adam(..., lr=0.001); opt.step()` | `(adam-step w 0.001)` |
 | `with torch.no_grad():` | обычные операции без `!` (`matmul`, `t+`, …) |
 
 ## 7.7 Полный пример: линейная регрессия

@@ -1,6 +1,6 @@
 # Глава 18. Шпаргалка: QLISP ↔ Python
 
-Быстрый перевод между QLISP и Python-стеком (NumPy / PyTorch / scikit-learn).
+Быстрый перевод между QLISP и Python-стеком (NumPy / PyTorch / scikit-learn). Имена примитивов в QLISP после `SymbolTable::intern` хранятся в верхнем регистре (`T+`, `MATMUL!`, `MSE!`, `PARAM`, `GRAD!`); пользователь может писать их в любом регистре.
 
 ## 18.1 Базовый синтаксис
 
@@ -21,6 +21,7 @@
 | `'(1 2 3)` | `[1, 2, 3]` (литерал) |
 | `(equal a b)` | `a == b` |
 | `(print "x" 42)` | `print("x", 42)` |
+| `(type-of x)` | `type(x).__name__` |
 
 ## 18.2 Списки
 
@@ -56,8 +57,12 @@
 | `(tmean t)` | `t.mean()` |
 | `(argmax t)` | `t.argmax()` |
 | `(tensor-shape t)` | `t.shape` |
-| `(sqrt t)` / `(exp t)` / `(log t)` | `np.sqrt(t)` / `np.exp(t)` / `np.log(t)` |
-| `(stack ...)` / `(concat ...)` | `np.stack(...)` / `np.concatenate(...)` |
+| `(tensor-dtype t)` | `t.dtype` (`F32`/`F16`/`F64`/`I32`/`I64`/`U8`) |
+| `(tsin t)` / `(tcos t)` / `(t/tanh t)` | `np.sin(t)` / `np.cos(t)` / `np.tanh(t)` |
+| `(concat a b)` / `(stack a b)` | `np.concatenate([a,b])` / `np.stack([a,b])` |
+| `(tensor-f16 t)` / `(tensor-f32 t)` / `(tensor-u8 t)` | `t.astype(np.float16/float32/uint8)` |
+| `(tref t i j)` | `t[i, j]` |
+| `(tensor-item t)` / `(tensor->list t)` | `t.reshape(-1)[0]` / `t.ravel().tolist()` |
 | `(save-npy t "f.npy")` / `(load-npy "f.npy")` | `np.save` / `np.load` |
 
 ## 18.4 Автоград (PyTorch)
@@ -79,34 +84,48 @@
 
 | QLISP | PyTorch |
 |---|---|
-| `(linear 4 2)` | `nn.Linear(4, 2)` |
-| `(sequential (list l1 l2))` | `nn.Sequential(l1, l2)` |
+| `(linear 4 2)` (из DL) | `nn.Linear(4, 2)` |
+| `(sequential (list l1 l2))` (из DL) | `nn.Sequential(l1, l2)` |
 | `(layer x)` | `model(x)` / `forward` |
 | `(batchnorm! h)` / `(layernorm! h)` | `nn.BatchNorm1d` / `nn.LayerNorm` |
 | `(dropout! h 0.5)` | `nn.Dropout(0.5)` |
 | `(conv2d! x k s p)` | `F.conv2d(x, k, stride=s, padding=p)` |
 | `(maxpool2d! x k s)` | `F.max_pool2d(x, k, s)` |
-| `(weighted-lookup idx W)` | `nn.Embedding` lookup |
+| `(weighted-lookup probs v1 v2)` | взвешенная сумма (скаляр) |
 
 ## 18.6 Классический ML (sklearn)
 
 | QLISP | scikit-learn |
 |---|---|
-| `(train-test-split data target 0.8)` | `train_test_split(train_size=0.8)` |
+| `(range 5)` / `(range 5 10 2)` | `range(5)` / `range(5, 10, 2)` |
+| `(train-test-split data target ratio)` | `train_test_split(train_size=ratio)` |
 | `(standard-scale-lst xs)` | `StandardScaler` |
 | `(minmax-scale-lst xs)` | `MinMaxScaler` |
 | `(knn-predict x X y k)` | `KNeighborsClassifier(k)` |
 | `(nb-fit X y)` / `(nb-predict x m)` | `GaussianNB` |
-| `(build-tree X y depth)` | `DecisionTreeClassifier` |
-| `(random-forest-fit X y n d)` | `RandomForestClassifier` |
-| `(gb-fit X y n lr d)` | `GradientBoostingClassifier` |
-| `(kmeans-fit X k iters)` | `KMeans` |
+| `(build-tree X y depth)` | `DecisionTreeClassifier(max_depth=...)` |
+| `(random-forest-fit X y n d)` | `RandomForestClassifier(n, max_depth=d)` |
+| `(gb-fit X y n lr d)` | `GradientBoostingClassifier(n, lr, d)` |
+| `(kmeans-fit X k iters)` | `KMeans(k, max_iter=iters)` |
 | `(accuracy-score yp yt)` | `accuracy_score` |
 | `(cross-val-score X y k fit score)` | `cross_val_score(cv=k)` |
 | `(grid-search X y params fit score)` | `GridSearchCV` |
 | `(linear-kernel a b)` / `(rbf-kernel a b g)` | kernels из `sklearn.metrics.pairwise` |
+| `(sigmoid-kernel a b alpha c)` | `tanh(α·⟨a,b⟩+c)` |
 
-## 18.7 Строки, файлы, прочее
+## 18.7 Символьный и нейросимвольный слой
+
+| QLISP | Python-аналог |
+|---|---|
+| `(match v (p1 r1) (p2 r2) (_ def))` | `match v: case p1: r1; case p2: r2; case _: def` |
+| `(unify a b)` | `unification.unify(a, b)` |
+| `(put 'cat 'legs 4)` / `(get 'cat 'legs)` | атрибуты у enum'ов / `obj.attr = 4` |
+| `(assert-fact (cat ?x))` + `(defrule ...)` + `(run-rules)` + `(query ...)` | pyDatalog / CLIPS / Prolog |
+| `(amb-let ...)` + `(require ...)` + `(amb-collect ...)` | `itertools.product` + backtracking |
+| `(ns-if logits (("a") branch-a) (("b") branch-b))` | tree-of-experts (нет аналога) |
+| `(ns-grad! loss 'cat)` | per-sample STE + guilt detector (нет аналога) |
+
+## 18.8 Строки, файлы, прочее
 
 | QLISP | Python |
 |---|---|
@@ -115,19 +134,31 @@
 | `(number-to-string 42)` | `str(42)` |
 | `(slurp "f")` / `(spit "f" s)` | `open("f").read()` / `.write(s)` |
 | `(read-lines "f")` | `open("f").readlines()` |
+| `(read-csv "f.csv")` | `csv.reader(open("f.csv"))` |
 | `(re-find p s)` / `(re-replace p r s)` | `re.search` / `re.sub` |
-| `(now-ts)` / `(sleep s)` | `time.time()` / `time.sleep` |
-| `(json-parse s)` / `(json-stringify d)` | `json.loads` / `json.dumps` |
-| `(ffi-load "lib.so")` | `ctypes.CDLL` |
+| `(re-split p s)` | `re.split(p, s)` |
+| `(now-ts)` / `(sleep s)` | `time.time()` / `time.sleep(s)` |
+| `(now-iso-str)` | `datetime.now().isoformat()` |
+| `(elapsed expr)` | contextmanager `timeit`/декоратор |
 | `(http-get url)` | `requests.get(url).text` |
-| `(type-of x)` | `type(x).__name__` |
+| `(dashboard port)` + `(log-metric "loss" v)` | TensorBoard |
 
-## 18.8 Компиляция
+## 18.9 Компиляция
 
 | QLISP | Python-мир |
 |---|---|
 | `qlispc prog.qlsp -o prog` | `nuitka --onefile prog.py` |
-| `(START-TRACE)` + `(HLO-COMPILE out)` + `(HLO-RUN ...)` | `torch.compile` / `jax.jit` |
+| `(start-trace)` + `(graph-param x)` + `(hlo-compile out)` + `(hlo-run hlo x ...)` | `torch.compile` / `jax.jit` |
 | `(defuse! f (x) ...)` | `@torch.compile(fullgraph=True)` |
 | `(defuse f (x) ...)` | `@torch.compile` (с fallback) |
 | `QLISP_TARGET_TRIPLE=aarch64-linux-gnu` | кросс-компиляция под ARM |
+
+## 18.10 FFI
+
+| QLISP | Python-мир |
+|---|---|
+| `(ffi-load "lib.so")` | `ctypes.CDLL("lib.so")` |
+| `(ffi-call "sin" "float" 0.0)` | `lib.sin(0.0)` |
+| `(ffi-call "atan2" "float" 1.0 1.0)` | `lib.atan2(1.0, 1.0)` |
+| `(ffi-call "strlen" "int" "hello")` | `lib.strlen(b"hello")` |
+| `(ffi-import "libfoo.so" 'fn)` | `cdll.libfoo.fn` |

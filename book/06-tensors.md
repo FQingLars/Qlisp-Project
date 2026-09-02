@@ -2,53 +2,96 @@
 
 Тензоры — N-мерные массивы, центральный тип данных QLISP-ML. Аналог `np.ndarray` / `torch.Tensor`, но с линейной семантикой владения (гл. 4–5).
 
-## 6.1 Создание
+## 6.1 Структура тензора
+
+Из `src/tensor/tensor.hpp`:
+
+```cpp
+class Tensor {
+public:
+    enum DType : uint8_t { F32 = 0, F64, I32, I64, U8, F16 };
+    DType dtype;
+    std::vector<size_t> shape;
+    std::vector<size_t> strides;
+    size_t numel;
+    void *data;             // тензорный буфер в TensorBufferPool
+    Device *device;         // CPU/GPU (по умолчанию default_device → CPU)
+
+    bool requires_grad;
+    Tensor *grad;
+    GradNode *grad_node;    // связь с autograd-лентой
+    Tensor *m, *v;          // Adam state (хранится прямо на тензоре)
+    int64_t step;
+};
+```
+
+Поддерживаемые dtype: **F16, F32, F64, I32, I64, U8**. Размеры: `F16=2, F32=4, F64=8, I32=4, I64=8, U8=1` байт (`Tensor::dtype_size`).
+
+Промежуточные тензоры живут в scratch-scope, в `TensorBufferPool` — exact-size аллокация (см. `Tensor::create`: `t->device->alloc_pooled(numel * dtype_size(dt))` с `arena.track_external`).
+
+## 6.2 Создание
 
 ```lisp
-;; Литерал — вложенные списки
-(defvar a (tensor ((1.0 2.0) (3.0 4.0))))     ;; 2x2
+;; Литерал — вложенные списки F32 (по умолчанию)
+(defvar a (tensor ((1.0 2.0) (3.0 4.0))))     ;; 2x2 (F32)
 
 ;; Фабрики
 (zeros (list 2 3))        ;; нули            np.zeros((2,3))
 (ones (list 4 2))         ;; единицы         np.ones((4,2))
 (randn (list 100 1))      ;; N(0,1)          np.random.randn(100,1)
-(randint 1 6 (list 3 3))  ;; случайные целые
+(randint 1 6)             ;; случайное целое из [1,6)
 
 ;; Из списка
 (list->tensor '(1.0 2.0 3.0))             ;; вектор [3]
+
+;; Явный выбор dtype
+(tensor-f16 (randn (list 4 4)))           ;; [4,4] F16 (примитив TENSOR-F16)
+(tensor-f32 (randn (list 4 4)))           ;; [4,4] F32 (примитив TENSOR-F32)
+(tensor-u8  ...)                          ;; U8
+(tensor-dtype h)                          ;; → F16 / F32 / ...
 ```
 
 > 🐍 **Python-аналогия.**
 > ```python
 > a = np.array([[1., 2.], [3., 4.]])
 > np.zeros((2, 3)); np.ones((4, 2)); np.random.randn(100, 1)
+> a.astype(np.float16)
 > ```
 
-## 6.2 Информация о тензоре
+## 6.3 Информация о тензоре
 
 ```lisp
 (tensor-shape a)      ;; → (2 2)        a.shape
-(tref a 0)            ;; элемент по линейному индексу   a.flat[0]
-(tensor-item t)       ;; скаляр из тензора размерности 1  t.item()
+(tensor-dtype a)      ;; → F32          a.dtype
+(tref t 0 0)          ;; элемент по индексам (TREF)        a[0,0]
+(tensor->list t)      ;; → список значений       a.ravel().tolist()
+(tensor-item t)       ;; первый элемент тензора  t.reshape(-1)[0]
 ```
 
-## 6.3 Арифметика и матричные операции
+`tensor-item` — примитив `prim_tensor_item`, отдельный от `tensor->list` (для быстрого доступа к одному значению).
+
+## 6.4 Арифметика и матричные операции
 
 | QLISP | Что делает | NumPy |
 |---|---|---|
-| `(T+ a b)` | поэлементное сложение | `a + b` |
+| `(T+ a b)` | поэлементное сложение с broadcasting | `a + b` |
 | `(T- a b)` | поэлементная разность | `a - b` |
 | `(T* a b)` | поэлементное умножение | `a * b` |
-| `(MATMUL a b)` | матричное умножение | `a @ b` |
+| `(MATMUL a b)` | матричное умножение (2D × 2D) | `a @ b` |
 | `(RESHAPE t (list 4 1))` | изменение формы (глубокая копия) | `t.reshape(4,1)` |
 | `(TRANSPOSE t)` | транспонирование (глубокая копия) | `t.T` |
-| `(STACK ...)` / `(CONCAT ...)` | сборка тензоров | `np.stack` / `np.concatenate` |
-| `(T-FMA a b c)` | fused multiply-add: `a*b+c` | — (один SIMD-кирнел) |
+| `(CONCAT a b ...)` | конкатенация по первой оси (axis 0) | `np.concatenate` |
+| `(STACK a b ...)` | стопка с новой осью в начале | `np.stack` |
+| `(T+_IP a b)` / `(T*= a b)` | in-place варианты | `a += b` |
+| `(T-RELU t)` | relu in-place | — |
+| `(T-FMA a b c)` | fused multiply-add: `a*b+c` (одна SIMD-операция) | — |
 | `(T-FMA-RELU a b c)` | `max(0, a*b+c)` | — |
 
-Элементарные функции работают поэлементно: `(SQRT t)`, `(EXP t)`, `(LOG t)`, `(SIN t)`, `(COS t)`, `(ABS t)`, `(POW t p)`.
+Все тензорные операции — именно с префиксом `T*` (или `MATMUL`/`RESHAPE`/`CONCAT`/…). Скалярная арифметика (`+`, `*`, `SQRT`, `EXP`, `LOG`) работает только с числами — тензоры не подставляются неявно. Поэлементные тензорные аналоги математики:
 
-Арифметика `+`, `-`, `*` тоже работает с тензорами (броадкаст, как в NumPy).
+```lisp
+(TSIN t)   (TCOS t)   (T/TANH t)   ;; тригонометрия по элементам
+```
 
 ```lisp
 (defvar x (randn (list 3 2)))
@@ -56,61 +99,110 @@
 (print (tensor-shape (matmul x y)))    ;; → (3 4)
 ```
 
-## 6.4 Broadcasting
+> 🐍 `T+`/`T*` — `a + b`/`a * b`; `MATMUL` — `a @ b`.
 
-Как в NumPy: операции растягивают измерения размера 1.
+## 6.5 Broadcasting
+
+Как в NumPy: операции растягивают измерения размера 1 (скаляр или вектор-строка к матрице). Реализовано в `Tensor::add/sub/mul/div` через `Tensor::broadcast_shape` (numpy-style, right-aligned, dim=1 broadcasts).
 
 ```lisp
 (T+ (tensor ((1.0 2.0) (3.0 4.0))) (tensor ((10.0))))   ;; прибавит 10 ко всем
 (T+ (randn (list 4 3)) (randn (list 3)))                ;; строка-вектор ко всем строкам
 ```
 
-## 6.5 Редукции
+Для F16/F32 mixed dtype промежуточные значения приводятся через `promote_dtype` (`src/tensor/tensor.cpp:143`):
+- `F16 + F16 → F16`
+- `F64 + X → F64`
+- всё остальное → `F32`
+
+## 6.6 Редукции
 
 ```lisp
 (TSUM t)                    ;; сумма всех элементов         t.sum()
 (TSUM t (list 0))           ;; сумма по оси 0               t.sum(axis=0)
 (TMEAN t)                   ;; среднее                      t.mean()
 (ARGMAX t)                  ;; индексы максимумов           t.argmax()
+(WEIGHTED-LOOKUP probs v1 v2) ;; взвешенная сумма: ∑ pᵢ·vᵢ (скаляр)
 ```
 
-## 6.6 Активации и элементы нейросетей
+`WEIGHTED-LOOKUP` — обычная операция (`prim_weighted_lookup`); для HLO-графа есть отдельный `HLO-WEIGHTED-LOOKUP` (`prim_hlo_weighted_lookup`).
+
+## 6.7 Активации и элементы нейросетей
+
+Autograd-операции (с `!`) пишут на ленту; те же операции без `!` — чистые вычисления (гл. 7).
 
 ```lisp
-(RELU t)      (SOFTMAX t)   (SIGMOID t)   (TANH t)
-(CONV2D input kernel stride padding)
-(MAXPOOL2D input kernel stride)
-(DROPOUT t rate)  (BATCHNORM t)  (LAYERNORM t)
-(WEIGHTED-LOOKUP indices weight-matrix)   ;; embedding-lookup
-(FFT signal)                              ;; быстрое преобразование Фурье
+(RELU t)          ;; без ! — чистое вычисление
+(DROPOUT t 0.5)   ;; без ! — тоже доступен
+
+(SOFTMAX! t)   (SIGMOID! t)   (TANH! t)     ;; с ! — пишут на ленту
+(CONV2D! input kernel 1 0)                   ;; input/kernel: [N,C,H,W], stride=1, padding=0
+(MAXPOOL2D! input 2 2 2)                     ;; (x kh kw stride): окно 2×2, stride 2
+(BATCHNORM! x gamma beta 1e-5)      ;; BN(x, γ, β, ε)
+(LAYERNORM! x gamma beta 1e-5)      ;; LN(x, γ, β, ε)
+(BATCHNORM! h)  (LAYERNORM! h)               ;; нормализации
+(CROSS-ENTROPY! logits labels)
+(FFT signal)                                 ;; быстрое преобразование Фурье
 ```
 
-> 🐍 Это `torch.nn.functional.relu / softmax / sigmoid / tanh / conv2d / max_pool2d / dropout / batch_norm / layer_norm / embedding / fft` — но как обычные функции языка, без классов-обёрток.
+> 🐍 Это `torch.nn.functional.relu / softmax / sigmoid / tanh / conv2d / max_pool2d / dropout / batch_norm / layer_norm / cross_entropy` — но как обычные функции языка, без классов-обёрток.
 
-## 6.7 Производительность: SIMD и BLAS
+## 6.8 Производительность: SIMD и BLAS
 
-- Поэлементные операции (`T+`, `T*`, `RELU`, …) векторизованы: AVX2 (8 float за инструкцию) на x86_64, NEON (4 float) на ARM.
-- `MATMUL` идёт через OpenBLAS (`cblas_sgemm`) — производительность уровня NumPy/PyTorch на CPU.
-- Тензоры хранятся в device-пуле; буферы переиспользуются между итерациями (гл. 5).
+- Поэлементные операции (`T+`, `T*`, `T-FMA`, `TSIN`, `RELU`, …) векторизованы через Device-API (`src/gpu/device.cpp`):
+  - **AVX2/FMA** на x86_64 — 8×float за инструкцию (256 бит).
+  - **NEON** на ARM — 4×float за инструкцию (128 бит).
+  - Для F16 — отдельные `_Float16` ядра (`launch_elementwise_add_half` и т.п.); на x86_64 с `-march=native` компилятор генерирует F16C.
+- `MATMUL` идёт через OpenBLAS (`cblas_sgemm`, `#ifdef QLISP_HAS_BLAS`) — производительность уровня NumPy/PyTorch на CPU.
+- Для F16 в matmul — отдельное ядро `launch_matmul_half` (half хранение, аккумуляция внутри ядра).
+- Данные тензоров живут в **TensorBufferPool** (exact-size, гл. 5): буфер выделяется ровно под размер тензора, без округлений; при выходе из scope возвращается в free list по точному размеру и переиспользуется. Никакой фрагментации и аллокаций в горячем цикле.
 
-## 6.8 Сериализация
+## 6.9 dtype: F16, F32 и другие
+
+QLISP поддерживает несколько типов данных тензоров. В `src/tensor/tensor.hpp`:
+
+```cpp
+enum DType : uint8_t { F32 = 0, F64, I32, I64, U8, F16 };
+```
+
+- **F32** — default для литералов (`(tensor ...)` создаёт F32).
+- **F16** — IEEE 754 binary16 (`_Float16` через `<cmath>`/`<cstring>` в `src/tensor/half.hpp`); есть kernels `add/mul/relu/matmul/sum` через `launch_*_half` API.
+- **F64** — double (promote_dtype для F64+X).
+- **I32, I64** — целочисленные тензоры (для argmax, embedding и т.п.).
+- **U8** — байты (для квантизации, embedding-таблиц, изображений).
+
+Преобразования: `tensor-dtype` возвращает символ dtype (`F16`/`F32`/...), `tensor-f16`/`tensor-f32`/`tensor-u8` создают тензор нужного dtype. Смешанные F16/F32 промежуточные результаты приводятся через `Tensor::promote_dtype`.
+
+Сериализация: поддерживается NPY `<f2` (raw-байтовый доступ через `half_bits`/`half_from_bits` в `half.hpp`).
+
+## 6.10 Сохранение/загрузка: NPY
+
+Взаимодействие с NumPy — через `LOAD-NPY`/`SAVE-NPY` (примитивы в `src/data/`):
 
 ```lisp
-(SAVE-NPY t "weights.npy")    ;; NumPy-формат!      np.save
-(defvar w (LOAD-NPY "weights.npy"))               ;; np.load
+(save-npy t "weights.npy")    ;; сохранить в .npy
+(load-npy "weights.npy")      ;; загрузить обратно
 ```
 
-Обмен с Python-экосистемой «из коробки»: обучили веса в QLISP — загрузили в NumPy, и наоборот.
+F16 сериализуется как `<f2` (raw 2 байта на элемент). Эти примитивы позволяют интегрироваться с Python-экосистемой без потерь.
 
-## 6.9 Мини-пример: нормализация матрицы
+## 6.11 Полная картина тензорных операций
 
-```lisp
-(defvar x (randn (list 5 3)))
-
-;; z-score по каждому элементу
-(defvar mu  (tmean x))
-(defvar sd  (sqrt (t* (t- x mu) (t- x mu))))
-(print (tensor-shape x))
+```text
+           ┌────────────────────────────────────────┐
+           │  Tensor: dtype, shape, strides, numel │
+           └────────────────────────────────────────┘
+              │      │       │        │          │
+   create/save  view   pointwise reduce     matmul/conv/pool
+        │       │       │        │          │
+        ▼       ▼       ▼        ▼          ▼
+   TensorBufferPool   SIMD kernels    cblas_sgemm / F16 ядра
+   (exact-size)       (AVX2/FMA/NEON)  (BLAS / half)
 ```
 
-Полные примеры с обучением — в главах 7, 8 и 17.
+## 6.12 Известные ограничения
+
+- Поле `Tensor::size_bytes` **не реализовано** (есть только `numel * dtype_size(dtype)` через инлайн-вычисление).
+- Поле `Tensor::is_stable` **не реализовано** — пока всё управляется через `Scope::track_external`.
+- HLO-путь остаётся **F32-only** (см. `src/tensor/CODE.md`): matmul/add/mul/relu/sum в F16 — только в тензорном слое, не в HLO-компиляции.
+- `TANH` для тензоров — `T/TANH` (примитив `prim_tensor_tanh`), не `TANH` (тот зарезервирован для autograd-варианта `TANH!`).
