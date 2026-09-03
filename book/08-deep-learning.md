@@ -1,155 +1,233 @@
 # Глава 8. Глубокое обучение
 
-Глава про построение нейросетей: слои, композиция, CNN-операции, нормализация и полный цикл обучения.
+Глава про построение нейросетей: слои как данные, прямой проход, цикл обучения, свёрточные примитивы, нормализация, Adam-состояние.
 
-## 8.1 Слои как замыкания
+## 8.1 Модуль `dl` v2: слои как данные (v2.3.0+)
 
-В QLISP нет класса `nn.Module`. Слой — это **функция, возвращающая замыкание** с захваченными параметрами. Модуль `dl` (24 строки в `stdlib/dl.qlsp`) задаёт его так:
+В v2.2.x модуль `dl` (`stdlib/dl.qlsp`, 24 строки) определял слой как **замыкание** — функцию с захваченными `w` и `b`. Это работало, но в v2.3.0 модуль **полностью переписан** (`19dafbb`): модель — обычный список-структура, слои — данные, а не объекты.
+
+Причины переписывания:
+
+- **HibLin-безопасность между формами.** Замыкание захватывает `w`/`b` в scratch-closure, и при `reset_scratch` параметры могут пережить некорректно. Список-структура параметризуется явно через `defvar`/промоут — переживает границы форм по тем же правилам, что и любое другое значение.
+- **QSRD v2-сериализуемость.** Список-структура сериализуется QSRD v2 (гл. 16) — можно сохранять и загружать обученные модели как данные, без специального протокола.
+- **Контракт tape.** Слои-как-данные не «прячут» tape-узлы в замыканиях — граф полностью видим в scope.
+
+### Модель как список
 
 ```lisp
-;; ВНИМАНИЕ: linear в stdlib/dl.qlsp использует соглашение matmul(w, x),
-;; а не matmul(x, w) — см. исходник.
+(import DL)
+;;                       in    out
+(defvar model (list (linear 1 4)     ;; слой: (list 'linear W b)
+                    'relu            ;; активация: голый символ
+                    (linear 4 1)))   ;; последний слой
+```
+
+Слой — это cons-ячейка формы `(linear W B)`, где `W` и `B` — обучаемые параметры (`PARAM`, requires_grad=true). Активации — голые символы: `'relu`, `'sigmoid`, `'tanh`, `'softmax`. Оптимизаторы — тоже символы: `'sgd`, `'adam`.
+
+### Создание слоя: `linear`
+
+```lisp
+;; Полносвязный слой: (linear in out) → (list 'linear W B)
+;; Конвенция батча: x [N in] → y [N out]
 (defun linear (in-features out-features)
-  (let ((w (param (randn (list out-features in-features))))
-        (b (param (randn (list out-features)))))
-    (lambda (x)
-      (t+! (matmul! w x) b))))
-
-(defvar layer (linear 4 2))    ;; Linear(4 -> 2) с обучаемыми w, b
-
-;; применение
-(defvar out (layer x))         ;; x: тензор [N, 4] → [N, 2]
+  (list 'linear
+        (param (randn (list in-features out-features)))
+        (param (zeros (list 1 out-features)))))
 ```
 
-Если вы предпочитаете `matmul(x, w)` (как в PyTorch), перепишите `linear` локально: 4 строки, никакого волшебства за `nn.Module` нет.
+> 🐍 Аналог `nn.Linear(in_features, out_features)`. В `Linear` PyTorch смещение — `[out_features]` (broadcast), здесь — `[1, out_features]` (явная форма `[N, out]`, broadcast-friendly). В остальном — прямой аналог.
+
+Доступ к весам и смещению слоя (если нужно — для отладки, для ручного обновления):
 
 ```lisp
-;; Альтернативная версия linear (matmul(x, w))
-(defun linear (in-features out-features)
-  (let ((w (param (randn (list in-features out-features))))
-        (b (param (randn (list out-features)))))
-    (lambda (x)
-      (t+! (matmul! x w) b))))
+(layer-w (car model))       ; → W параметр первого слоя
+(layer-b (car model))       ; → B параметр первого слоя
 ```
 
-> 🐍 **Python-аналогия.** Это `nn.Linear(4, 2)` без класса: параметры живут в замыкании, а `layer(x)` — это `forward`. Функциональный стиль в духе JAX/Haiku: те же идеи, но с мутабельными на месте параметрами.
-
-## 8.2 Композиция: `sequential`
-
-`stdlib/dl.qlsp`:
+### Прямой проход: `net-forward`
 
 ```lisp
-(defun sequential layers
-  (lambda (x)
-    (let ((out x))
-      (dolist layer layers
-        (setq out (layer out)))
-      out)))
+(defun net-forward (model x)
+  (if (null model)
+      x
+      (let ((layer (car model)))
+        (if (symbolp layer)
+            (net-forward (cdr model) (apply-activation layer x))
+            (net-forward (cdr model)
+                         (t+! (matmul! x (layer-w layer))
+                              (layer-b layer)))))))
+;; или просто:
+(net-forward model x)
 ```
 
-`dolist` — стандартная форма для итерации по списку. Идиоматичный вариант без `dolist`:
+> 🐍 Аналог `model(x)` для `nn.Sequential`. Разница: `net-forward` — рекурсия по cons-списку, без `for`/`while`, без Python-циклов. Это согласуется с HibLin-семантикой — каждый шаг рекурсии в новом scope.
+
+`apply-activation` — внутренний helper:
 
 ```lisp
-(defun apply-layers (layers x)
-  (if (null layers) x
-    (apply-layers (cdr layers) (funcall (car layers) x))))
-
-(defun sequential (layers)
-  (lambda (x) (apply-layers layers x)))
-
-(defvar model (sequential (list
-  (linear 2 4)     ;; скрытый слой
-  (linear 4 1))))  ;; выход
-
-(defvar out (model x))
+;; (В stdlib/dl.qlsp определены макросы/функции для каждой активации)
+(relu x)         ; max(x, 0)
+(sigmoid x)      ; 1 / (1 + exp(-x))
+(tanh x)         ; стандартный tanh
+(softmax x)      ; softmax по последней оси
 ```
 
-## 8.3 Train step
+> 🐍 Аналог `F.relu(x)`, `F.sigmoid(x)`, `torch.tanh(x)`, `F.softmax(x, dim=-1)`.
 
-В `stdlib/dl.qlsp` есть готовая функция `train-step`:
+### Шаг обучения: `train-step`
+
+```lisp
+(train-step model x y-true optimizer lr)
+;;   model       : список-структура
+;;   x, y-true   : батч [N, in] и ground truth [N, out]
+;;   optimizer   : 'sgd или 'adam
+;;   lr          : learning rate
+;; → последний loss (mse!)
+```
+
+Реализация (из `stdlib/dl.qlsp`):
 
 ```lisp
 (defun train-step (model x y-true optimizer lr)
-  (let ((y-pred (model x))
-        (loss (mse! y-pred y-true)))
-    (grad! loss)
-    (optimizer lr x)
-    (print loss)))
+  (let ((loss (mse! (net-forward model x) y-true)))
+    (GRAD! loss)
+    (opt-apply model optimizer lr)
+    loss))
 ```
 
-Здесь `optimizer` — функция вида `(lambda (lr x) (sgd-step w lr) (sgd-step b lr) …)` для конкретной модели.
+> 🐍 Аналог одного шага `loss.backward(); opt.step(); return loss` в PyTorch. Отличие: `GRAD!` объединяет `backward` + `tape.clear()`.
 
-## 8.4 Импорт
+### `opt-apply` — шаг оптимизатора
 
-Модуль `DL` вшит в бинарник наравне с остальными восемью (`src/main.cpp:embedded_modules[]`):
+```lisp
+(defun opt-apply (model optimizer lr)
+  (if (null model) nil
+    (let ((layer (car model)))
+      (if (equal (car layer) 'linear)
+          (if (equal optimizer 'adam)
+              (progn (ADAM-STEP (layer-w layer) lr)
+                     (ADAM-STEP (layer-b layer) lr))
+              (progn (SGD-STEP (layer-w layer) lr)
+                     (SGD-STEP (layer-b layer) lr)))))
+      (opt-apply (cdr model) optimizer lr)))
+```
+
+> 🐍 Аналог цикла по `model.parameters()` в PyTorch — здесь рекурсия по cons-списку.
+
+### `train-epochs` — N эпох
+
+```lisp
+(defun train-epochs (model x y-true optimizer lr epochs)
+  (let ((loss nil) (i 0))
+    (while (< i epochs)
+      (setq loss (train-step model x y-true optimizer lr))
+      (setq i (+ i 1)))
+    loss))
+```
+
+> 🐍 Аналог `for epoch in range(epochs): ...` в Python. В QLISP — `while` (с v2.3.0 `dl` использует `while` для циклов фиксированного счёта; рекурсия осталась для `net-forward` и `opt-apply` ради согласованности с HibLin-семантикой).
+
+## 8.2 Полный пример: XOR (с использованием DL v2)
 
 ```lisp
 (import DL)
-```
 
-Если в вашей сборке `dl.qlsp` отсутствует (старая сборка), скопируйте содержимое `stdlib/dl.qlsp` в начало своего файла.
-
-## 8.5 CNN-операции и нормализация
-
-Эти операции живут не в `DL`, а в ядре (см. гл. 6) и доступны всегда:
-
-```lisp
-(CONV2D! input kernel 1 0)              ;; [N,C,H,W] x [out_C,in_C,kH,kW], stride=1, padding=0
-(MAXPOOL2D! input 2 2 2)                ;; (x kh kw stride): окно 2×2, stride 2
-(BATCHNORM! x gamma beta 1e-5)          ;; BN(x, γ, β, ε)
-(LAYERNORM! x gamma beta 1e-5)          ;; LN(x, γ, β, ε)
-(DROPOUT! h 0.5)                        ;; dropout в режиме обучения
-(SOFTMAX! t)   (SIGMOID! t)   (TANH! t) ;; активации
-```
-
-Все эти операции — autograd-варианты (с `!`), запись на ленту.
-
-## 8.6 Полный цикл обучения (XOR)
-
-```lisp
-(import DL)
-(defvar lr 0.5)
-
+;; XOR-датасет
 (defvar X (tensor ((0.0 0.0) (0.0 1.0) (1.0 0.0) (1.0 1.0))))
 (defvar Y (tensor ((0.0) (1.0) (1.0) (0.0))))
 
-;; параметры (в замыканиях слоёв)
-(defvar model (sequential (list
-  (linear 2 4)        ;; 2 -> 4
-  (linear 4 1))))     ;; 4 -> 1
+;; Модель: 2 → 4 (ReLU) → 1
+(defvar model (list (linear 2 4)
+                    'relu
+                    (linear 4 1)))
 
-;; ручной шаг обучения — здесь `optimizer` должен достать параметры модели
-;; (для демонстрации используем sgd-step на конкретных w):
-(defun train-step ()
-  (let ((out (model X)))
-    (let ((loss (mse! out Y)))
-      (grad! loss)
-      ;; ... здесь шаги SGD по всем параметрам модели
-      loss)))
+;; Обучение: 500 эпох, SGD, lr=0.5
+(train-epochs model X Y 'sgd 0.5 500)
+
+;; Проверка
+(net-forward model X)
+;; → тензор, близкий к [[0], [1], [1], [0]]
 ```
 
-Подробный разбор полного MLP для XOR — в главе 17.
+### Python-эквивалент (PyTorch)
 
-## 8.7 Стиль кода: слои vs классы
+```python
+import torch
+import torch.nn as nn
 
-Важно понимать идиоматику ML-кода QLISP: **модели обычно пишут не классами, а замыканиями**:
+X = torch.tensor([[0., 0.], [0., 1.], [1., 0.], [1., 1.]])
+Y = torch.tensor([[0.], [1.], [1.], [0.]])
+
+model = nn.Sequential(nn.Linear(2, 4), nn.ReLU(), nn.Linear(4, 1))
+opt = torch.optim.SGD(model.parameters(), lr=0.5)
+
+for epoch in range(500):
+    pred = model(X)
+    loss = nn.functional.mse_loss(pred, Y)
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+
+print(model(X))  # → [[~0], [~1], [~1], [~0]]
+```
+
+### Ключевые различия
+
+| QLISP | PyTorch | Пояснение |
+|---|---|---|
+| `(defvar model (list ...))` | `nn.Sequential(...)` | модель — данные, а не объект |
+| `(net-forward model x)` | `model(x)` | прямой проход по cons-списку (рекурсия) |
+| `(train-step model x y 'sgd lr)` | `loss.backward(); opt.step()` | одна функция = forward + loss + backward + step |
+| `(train-epochs model x y 'sgd lr 500)` | `for epoch in range(500): ...` | N эпох, `while` |
+| `'sgd`, `'adam` (символы) | `optim.SGD`, `optim.Adam` (объекты) | оптимизатор — выбираемый символ |
+
+## 8.3 Свёрточные примитивы
+
+Вне модуля `dl` (в ядре) есть autograd-операции для свёрточных сетей:
+
+| Примитив | Что делает | Python-аналог |
+|---|---|---|
+| `(conv2d! x k s p)` | 2D-свёртка | `F.conv2d(x, k, stride=s, padding=p)` |
+| `(maxpool2d! x k s)` | 2D max-pooling | `F.max_pool2d(x, kernel_size=k, stride=s)` |
+| `(batchnorm! h)` | batch normalization | `nn.BatchNorm1d`/`BatchNorm2d` |
+| `(layernorm! h)` | layer normalization | `nn.LayerNorm` |
+| `(dropout! h 0.5)` | dropout (p=0.5) | `nn.Dropout(0.5)` |
+| `(weighted-lookup probs v1 v2)` | взвешенная сумма (скаляр) | ручное `probs[0]*v1 + probs[1]*v2` |
+| `(argmax t)` / `(softmax! t)` | argmax / softmax | `t.argmax()` / `F.softmax(t, dim=-1)` |
+
+Все эти примитивы **записывают на ленту** (суффикс `!`) и участвуют в `(grad! loss)`.
+
+> 🐍 Эти операции не имеют «удобного» Python-аналога, объединяющего в один prim — в PyTorch каждая идёт через `torch.nn.functional` или `torch.Tensor`. В QLISP всё встроено.
+
+## 8.4 Контракт tape для DL v2
+
+- Параметры создаются через `PARAM` (requires_grad=true), тензор-узел tape живёт на самом тензоре и **переживает HibLin-promote** в stable-скоп.
+- Adam-состояние (`m`/`v`/`step`) аллоцируется в stable-scope **на самом параметре** (v2.3.0+, исправление `f61426b`) — состояние оптимизатора не умирает с итерацией.
+- Все `!`-операции внутри `net-forward` и `train-step` пишут на tape. После `GRAD!` tape пуст.
+- `(train-step ...)` возвращает loss — можно накапливать в список для логов.
+
+## 8.5 HLO-инференс модели (гл. 10)
+
+После обучения можно скомпилировать прямой проход в нативный код:
 
 ```lisp
-(defvar model (linear 4 2))     ;; замыкание с параметрами внутри
-(model x)
+(start-trace)
+(defvar dx (graph-param X))
+;; собрать граф заново (трейс на стабильных входах)
+(defvar h1 (relu (t+ (matmul dx (layer-w (car model))) (layer-b (car model)))))
+(defvar out (t+ (matmul h1 (layer-w (car (cdr (cdr model)))))
+                (layer-b (car (cdr (cdr model))))))
+(defvar hlo (hlo-compile out))
+(defvar result (hlo-run hlo X))   ; нативный инференс
 ```
 
-Классы (гл. 13) уместны для **данных** (датасеты, конфиги, узлы деревьев), замыкания — для **поведения** (слои, модели). Это противоположно PyTorch, где `nn.Module` — класс.
+> 🐍 Аналог `torch.compile(model)` — но требует пересборки графа вручную (нет автоматической трассировки `model.forward`). Это явный trade-off v2.3.0.
 
-## 8.8 Сводная таблица
+Подробности — в гл. 10 (HLO-компиляция).
 
-| QLISP | PyTorch |
-|---|---|
-| `(defun linear (in out) (lambda (x) ...))` | `nn.Linear(in, out)` |
-| `(sequential (list l1 l2))` | `nn.Sequential(l1, l2)` |
-| `(layer x)` | `model(x)` / `forward` |
-| `(BATCHNORM! h)` / `(LAYERNORM! h)` | `nn.BatchNorm1d` / `nn.LayerNorm` |
-| `(DROPOUT! h 0.5)` | `nn.Dropout(0.5)` |
-| `(CONV2D! x k s p)` | `F.conv2d(x, k, stride=s, padding=p)` |
-| `(MAXPOOL2D! x k s)` | `F.max_pool2d(x, k, s)` |
-| `(WEIGHTED-LOOKUP probs v1 v2)` | взвешенная сумма (скаляр) |
+## 8.6 Известные ограничения DL v2
+
+- **Нет автоматической трассировки `model.forward`.** Чтобы скомпилировать в HLO, нужно вручную собрать cons-граф из параметров — `(graph-param w)`, `(graph-param b)`, и т.д. Удобство в том, что это явное.
+- **Нет `nn.Module`-подобной интроспекции.** Чтобы получить список параметров модели, нужно рекурсивно обойти cons-список — `opt-apply` делает это внутри.
+- **Нет `Sequential` с произвольным порядком.** Только `linear` → activation → `linear` → … (без `BatchNorm`/`Dropout` как слоёв). Свёрточные примитивы (`conv2d!`, `maxpool2d!`) — autograd-примитивы, а не слои; их можно вставить в HLO-граф, но не в `net-forward` напрямую.
+- **`opt-apply` рекурсивный** — для очень глубоких серий может быть стек-переполнение. На практике не проблема (модели редко >100 слоёв).

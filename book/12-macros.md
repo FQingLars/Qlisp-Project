@@ -130,14 +130,86 @@ QLISP гомоиконен: программа — это S-выражения, 
 
 `(SET-READER-MACRO ...)` позволяет расширять сам ридер — свои литеральные синтаксисы (как `#(...)` для векторов). Примитив `prim_set_reader_macro` (`src/eval/interpreter.cpp:1690`).
 
-## 12.10 Правила хорошего стиля
+## 12.10 Гомоиконные примитивы: EVAL, READ-FROM-STRING, FUNCTION-BODY (v2.3.0+)
+
+В QLISP код — данные. С v2.3.0 в рантайме доступны примитивы для работы с этой эквивалентностью напрямую (без обхода через строки).
+
+### `EVAL` — вычислить S-выражение
+
+```lisp
+(eval '(+ 1 2))                     ; → 3
+(eval (read-from-string "(* 6 7)"))  ; → 42
+```
+
+Используется в **meta-circular interpreter**'ах и DSL-движках. В отличие от `eval("print('hi')")` в Python, здесь нет строкового прохода — `eval` работает с cons-структурой напрямую.
+
+### `READ-FROM-STRING` / `WRITE-TO-STRING`
+
+```lisp
+(read-from-string "(+ 1 2)")     ; → (+ 1 2) — cons-структура
+(write-to-string '(+ 1 2))       ; → "(+ 1 2)" — строка для логов
+```
+
+Круговой путь: `(read-from-string (write-to-string expr)) ≡ expr` (с точностью до quote).
+
+### Макросы + `EVAL` = `DEFEVAL`
+
+```lisp
+;; Свой eval для кастомного AST (например, арифметика в polish notation)
+(defvar ast '(+ 1 (* 2 3)))
+
+;; Прямой eval: работает
+(eval ast)                        ; → 7
+
+;; Свой интерпретатор: для нестандартных форм
+(defun my-eval (expr)
+  (if (atom expr) expr
+    (let ((op (car expr)) (args (cdr expr)))
+      (case op
+        (+ (reduce + (map my-eval args)))
+        (* (reduce * (map my-eval args)))))))
+
+(my-eval ast)                     ; → 7
+```
+
+### `FUNCTION-BODY` — AST-инспекция
+
+```lisp
+(defun square (x) (* x x))
+(function-body 'square)           ; → ((* X X))   (cons-структура)
+
+;; Можно трансформировать
+(defun negate-body (fn-sym)
+  `(\ ,(function-params fn-sym)
+     (- ,@(function-body fn-sym))))
+
+(eval (negate-body 'square))      ; → замыкание, делающее (- (* x x))
+```
+
+> 🐍 В Python аналог — `inspect.getsource(f)` возвращает **исходный текст**, который нужно парсить. В QLISP — структурное представление, готовое к трансформации.
+
+### Полный пример: REPL внутри REPL
+
+```lisp
+(defun mini-repl ()
+  (while t
+    (print "mini> ")
+    (let ((line (read-line)))
+      (if (equal line "q") nil
+        (let ((result (eval (read-from-string line))))
+          (print "=> " result))))))
+```
+
+`mini-repl` использует `READ-FROM-STRING` (вместо чтения из STDIN вручную) и `EVAL`. В Python это было бы `eval(input("> "))`.
+
+## 12.11 Правила хорошего стиля
 
 1. **Функции по умолчанию, макросы по необходимости.** Макрос — если нужен ленивый аргумент, новая синтаксическая форма или вычисление на этапе раскрытия.
 2. Макрос должен раскрыться в **идиоматичный код** — проверяйте через `(macroexpand '(ваш-макрос ...))`.
 3. Временные символы — только через `gensym`.
 4. Помните: аргументы макроса вычисляются **каждый раз при подстановке** — `(unless expensive-call ...)` вызовет `expensive-call` столько раз, сколько вставили.
 
-## 12.11 Что есть в QLISP: macroexpand
+## 12.12 Что есть в QLISP: macroexpand
 
 Специальные формы `macroexpand-1` и `macroexpand` (см. `sym_macroexpand_1`/`sym_macroexpand` в `src/eval/interpreter.cpp:64-65`):
 

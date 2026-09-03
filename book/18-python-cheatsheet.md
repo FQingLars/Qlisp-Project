@@ -2,6 +2,24 @@
 
 Быстрый перевод между QLISP и Python-стеком (NumPy / PyTorch / scikit-learn). Имена примитивов в QLISP после `SymbolTable::intern` хранятся в верхнем регистре (`T+`, `MATMUL!`, `MSE!`, `PARAM`, `GRAD!`); пользователь может писать их в любом регистре.
 
+## 18.0 Гомоиконность (v2.3.0+)
+
+| QLISP | Python |
+|---|---|
+| `(read-from-string "(+ 1 2)")` | `ast.literal_eval("(1 + 2)")` / `eval("(1+2)", {})` |
+| `(write-to-string expr)` | `repr(expr)` / `ast.unparse(ast.parse(...))` |
+| `(eval expr)` | `eval(...)` (но нативно над S-выражениями) |
+| `(functionp 'f)` | `callable(f)` |
+| `(function-params 'f)` | `inspect.signature(f).parameters` |
+| `(function-body 'f)` | `inspect.getsource(f)` (но структурно) |
+| `(function-env 'f)` | `f.__closure__` |
+| `(symbol-name 'x)` | `str(x)` (но для имён) |
+| `(boundp 'x)` | `'x' in globals()` |
+| `(set-reader-macro '!' f)` | (нет аналога) |
+| `(randint 5 10)` | `random.randint(5, 10)` |
+| `(import-from (ml a b))` | `from ml import a, b` |
+| `(defvar_autograd w (randn ...))` | `w = nn.Parameter(torch.randn(...))` |
+
 ## 18.1 Базовый синтаксис
 
 | QLISP | Python |
@@ -80,18 +98,49 @@
 | `(adam-step w lr)` | Adam `opt.step()` |
 | обычные `matmul`, `t+` (без `!`) | `with torch.no_grad():` |
 
-## 18.5 Слои (DL ↔ torch.nn)
+## 18.5 Слои (DL v2 ↔ torch.nn)
 
-| QLISP | PyTorch |
+| QLISP (v2.3.0+) | PyTorch |
 |---|---|
-| `(linear 4 2)` (из DL) | `nn.Linear(4, 2)` |
-| `(sequential (list l1 l2))` (из DL) | `nn.Sequential(l1, l2)` |
-| `(layer x)` | `model(x)` / `forward` |
+| `(linear 4 2)` (из DL) | `nn.Linear(4, 2)` (но слой — cons, а не объект) |
+| `(list (linear 1 4) 'relu (linear 4 1))` | `nn.Sequential(nn.Linear(1,4), nn.ReLU(), nn.Linear(4,1))` |
+| `(net-forward model x)` | `model(x)` |
+| `(train-step model x y 'sgd lr)` | `loss.backward(); opt.step()` |
+| `(train-epochs model x y 'adam lr 100)` | `for _ in range(100): train_step(...)` |
+| `(layer-w layer)` / `(layer-b layer)` | `layer.weight` / `layer.bias` |
 | `(batchnorm! h)` / `(layernorm! h)` | `nn.BatchNorm1d` / `nn.LayerNorm` |
 | `(dropout! h 0.5)` | `nn.Dropout(0.5)` |
 | `(conv2d! x k s p)` | `F.conv2d(x, k, stride=s, padding=p)` |
 | `(maxpool2d! x k s)` | `F.max_pool2d(x, k, s)` |
 | `(weighted-lookup probs v1 v2)` | взвешенная сумма (скаляр) |
+
+> 🐍 Ключевое отличие: QLISP DL v2 — это **данные** (cons-список), а не объект. Модель сериализуется QSRD v2 как обычная структура. PyTorch-модель — объект с `state_dict`, требует отдельного протокола сериализации.
+
+## 18.5.1 Строки (модуль `string` ↔ `str`)
+
+| QLISP (v2.3.0+) | Python |
+|---|---|
+| `(string-length s)` | `len(s)` |
+| `(string-split s ",")` | `s.split(",")` |
+| `(string-join list ", ")` | `", ".join(list)` |
+| `(string-upcase s)` | `s.upper()` |
+| `(string-downcase s)` | `s.lower()` |
+| `(string-trim s)` | `s.strip()` |
+| `(string-replace s "a" "b")` | `s.replace("a", "b")` |
+| `(string-index s "x")` | `s.find("x")` |
+| `(string-reverse s)` | `s[::-1]` |
+| `(char-code #\A)` | `ord("A")` |
+| `(code-char 65)` | `chr(65)` |
+| `(string-to-number "3.14")` | `float("3.14")` |
+| `(string-contains s "sub")` | `"sub" in s` |
+| `(string-starts-with s "pre")` | `s.startswith("pre")` |
+| `(string-ends-with s "suf")` | `s.endswith("suf")` |
+| `(string-slice s 1 5)` | `s[1:5]` |
+| `(string-lines s)` | `s.splitlines()` |
+| `(string-words s)` | `s.split()` |
+| `(string-repeat s 3)` | `s * 3` |
+| `(to-string 42)` | `str(42)` |
+| `(type-of s)` → `STRING` | `type(s).__name__` → `str` |
 
 ## 18.6 Классический ML (sklearn)
 
@@ -132,12 +181,23 @@
 | `(strcat a b)` | `a + b` / `f"{a}{b}"` |
 | `(substr s i n)` | `s[i:i+n]` |
 | `(number-to-string 42)` | `str(42)` |
+| `(to-string x)` (v2.3.0+, общий) | `str(x)` |
 | `(slurp "f")` / `(spit "f" s)` | `open("f").read()` / `.write(s)` |
 | `(read-lines "f")` | `open("f").readlines()` |
 | `(read-csv "f.csv")` | `csv.reader(open("f.csv"))` |
 | `(re-find p s)` / `(re-replace p r s)` | `re.search` / `re.sub` |
 | `(re-split p s)` | `re.split(p, s)` |
 | `(now-ts)` / `(sleep s)` | `time.time()` / `time.sleep(s)` |
+
+## 18.8.1 QSRD v2 — бинарная сериализация (v2.3.0+)
+
+| QLISP | Python |
+|---|---|
+| `(qsrd-save "f.qsrd" obj)` | `pickle.dump(obj, f)` |
+| `(qsrd-load "f.qsrd")` | `obj = pickle.load(f)` |
+| `(qsrd-get "f.qsrd" 'field)` | `obj.field` (если QSRD — структура) |
+
+> 🐍 `pickle` теряет dtype/shape тензоров (нужен отдельный `torch.save` + `np.save`). QSRD v2 хранит всё вместе: S-выражения, тензоры с dtype и шейпом, скаляры — в одном файле с magic `"QSRD"` и u16-версией.
 | `(now-iso-str)` | `datetime.now().isoformat()` |
 | `(elapsed expr)` | contextmanager `timeit`/декоратор |
 | `(http-get url)` | `requests.get(url).text` |

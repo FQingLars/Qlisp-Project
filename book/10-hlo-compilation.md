@@ -5,12 +5,20 @@ HLO-пайплайн — killer feature QLISP: ваш тензорный код 
 ## 10.1 Идея
 
 ```text
-Код QLISP → трассировка в HLO-граф (START-TRACE … STOP-TRACE)
+Код QLISP → трассировка в HLO-граф (START-TRACE … HLO-COMPILE)
            → оптимизации (CSE, DCE, fusion, broadcast-shape, COMPOSITE-expansion)
-           → LLVM IR → llc → .o → g++ -shared → .so → dlopen → нативное исполнение
+           → LLVM IR → object file → lldELF → .so → dlopen → нативное исполнение
 ```
 
-Путь — **AOT через `popen("llc … && g++ -shared …")` + `dlopen`** (см. `src/codegen/hlo_codegen.cpp:923-937`). OrcJIT не используется — он крашился в QLISP (см. `TEMP_ISSUES.md` #18).
+С **v2.3.0** компиляция HLO-кернелов **полностью in-process** (коммит `ef4994e`): LLVM-эмит и линковка LLD происходят в самом процессе qlisp. Для Linux-линковки используется **in-process `lldELF`** (детект через CMake, `QLISP_HAS_LLD`). Пайплайн:
+
+```text
+HloGraph → LLVM IR (TargetMachine::emit) → object (.o)
+        → in-process lldELF → .so
+        → dlopen → нативный HLOPROG
+```
+
+До v2.3.0 путь был через `popen("llc … && g++ -shared …")` — теперь это fallback, если `lld` не подключена при сборке. In-process версия быстрее (нет fork/exec на каждый кёрнел) и надёжнее (нет проблем с PATH/shell-эскейпингом на Windows).
 
 - **CSE** — устранение общих подвыражений (`HloGraph::eliminate_common_subexpressions`).
 - **DCE** — удаление мёртвого кода (`HloGraph::eliminate_dead_code`).
@@ -19,8 +27,9 @@ HLO-пайплайн — killer feature QLISP: ваш тензорный код 
 - **Broadcast-shape** — `add`/`mul` вычисляют numpy-style broadcast shape (right-aligned, dim=1 broadcasts), а не форму левого операнда.
 - **BLAS** — узлы `DOT` (матричное умножение) вызывают `cblas_sgemm` через external LLVM declaration.
 - **Кэш** — диск в `/tmp/qlisp_hlo_cache/` с versioned fingerprint (`HloCodeGen::cache_` + `cache_dir()`). Повторные запуски не перекомпилируются.
+- **In-process LLD** — компилятор линкует .so через `lld::elf::link` (без `system("ld ...")`). Требует линковки `lld` + `zlib` + `zstd` (Debian-style линкеры требуют явный `-lz -lzstd`; CI обновлён: `lld-22 liblld-22-dev`).
 
-> 🐍 **Python-аналогия.** `torch.compile(model)` / `jax.jit(f)` — те же три этапа: трассировка, оптимизация, кодоген. Разница: в QLISP это встроено в язык и работает на S-выражениях, а не на байткоде Python.
+> 🐍 **Python-аналогия.** `torch.compile(model)` / `jax.jit(f)` — те же три этапа: трассировка, оптимизация, кодоген. Разница: в QLISP это встроено в язык и работает на S-выражениях, а не на байткоде Python. С v2.3.0 — никакого `subprocess.run(["llc", ...])` в горячем пути.
 
 ## 10.2 Граф и его узлы
 

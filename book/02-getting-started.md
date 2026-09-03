@@ -52,9 +52,9 @@ Enter expressions, press Ctrl+D to exit.
 => 16.0
 ```
 
-REPL при старте **автоматически загружает все 9 модулей стандартной библиотеки** (см. `embedded_modules[]` в `src/main.cpp`): `core`, `ml`, `io`, `regex`, `audio`, `datetime`, `pkg`, `errors`, `visual`. Они вшиты в бинарник через `cmake/stdlib_embed.cmake` (на этапе сборки `.qlsp` превращаются в `.h` через `xxd -i` и компилируются в бинарник).
+REPL при старте **автоматически загружает все 11 модулей стандартной библиотеки** (см. `embedded_modules[]` в `src/main.cpp:26-38`): `core`, `string`, `dl`, `ml`, `io`, `regex`, `audio`, `datetime`, `pkg`, `errors`, `visual`. Они вшиты в бинарник через `cmake/stdlib_embed.cmake` (на этапе сборки `.qlsp` превращаются в `.h` через `cmake/gen_stdlib_header.cmake` и компилируются в бинарник). С v2.3.0 поддержан частичный импорт: `(import-from (ml knn-predict nb-fit))`.
 
-> 🐍 **Python-аналогия.** Это как если бы `python` стартовал с предимпортированными `numpy`, `sklearn`, `re`, `datetime`, `time`, `urllib`, `tensorboard`.
+> 🐍 **Python-аналогия.** Это как если бы `python` стартовал с предимпортированными `numpy`, `torch`, `sklearn`, `re`, `datetime`, `time`, `urllib`, `tensorboard`, `str`.
 
 Многострочный ввод работает по скобкам и кавычкам: незакрытый `(` или незакрытая `"` продолжают ввод.
 
@@ -90,9 +90,9 @@ Hello, QLISP!
 (import VISUAL)    ;; дашборд метрик (TensorBoard-подобный HTTP)
 ```
 
-В исходниках есть также модуль `DL` (24 строки в `stdlib/dl.qlsp`: `linear`, `sequential`, `train-step`) — он вшит в бинарник наравне с остальными и доступен через `(import DL)`.
+В исходниках есть также модуль `DL` (v2.3.0+: ~100 строк в `stdlib/dl.qlsp`: `linear`, `net-forward`, `train-step`, `train-epochs`) — он вшит в бинарник наравне с остальными и доступен через `(import DL)`. С v2.3.0 модель — cons-список, слои — данные, а не замыкания.
 
-`(import M)` возвращает `"m-loaded"` и гарантирует, что модуль загружен однократно.
+`(import M)` возвращает `"m-loaded"` и гарантирует, что модуль загружен однократно. Для частичного импорта: `(import-from (dl linear train-step))` поднимает только указанные имена.
 
 ## 2.6 Компиляция
 

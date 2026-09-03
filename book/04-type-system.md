@@ -100,6 +100,26 @@ QLISP — язык с **постепенной типизацией** (gradual t
 
 Внутри `type-check` использует предикаты `is-fixnum?`, `is-flonum?`, `is-string?`, `is-cons?`, `is-tensor?`, `is-nil?` — все возвращают `nil` по умолчанию (заглушки-плейсхолдеры в `errors.qlsp`), в полноценной сборке переопределяются как C++-примитивы.
 
+## 4.8 `type-of` возвращает uppercase-имена (v2.3.0+)
+
+С v2.3.0 `type-of` нормализует имена типов в **uppercase** через `intern` (как и все остальные символы QLISP):
+
+| Значение | `type-of` (v2.3.0+) | `type(x).__name__` (Python) |
+|---|---|---|
+| `42` | `INT` | `int` |
+| `3.14` | `FLOAT` | `float` |
+| `"hi"` | `STRING` | `str` |
+| `'sym` | `SYMBOL` | (нет аналога) |
+| `(1 2 3)` | `LIST` | `list` |
+| `(tensor ((1.0)))` | `TENSOR` | `numpy.ndarray` / `torch.Tensor` |
+| `(lambda (x) x)` / `(defun ...)` | `FUNCTION` | `function` |
+| `#(1 2 3)` вектор | `VECTOR` | (нет аналога) |
+| `nil` | `NIL` | `NoneType` |
+
+> 🐍 В Python имена типов в lowercase, в QLISP — uppercase. Это согласовано с конвенцией intern-символов (`T+`, `MATMUL!` и т.д.).
+
+Главное изменение: cons-ячейки теперь сообщаются как `LIST` (а не `CONS`). Это упрощает DSL-валидацию и проверки типов: `(if (equal (type-of x) 'LIST) ...)`.
+
 ## 4.7 Известные ограничения (TODO)
 
 - `Tensor::is_stable` и `Tensor::size_bytes` пока **не реализованы** (см. `ARCHITECTURE.md` шапка и `TODO.md`).

@@ -250,7 +250,93 @@
 
 `deftest` ≈ `def test_...()` в pytest, `run-tests` ≈ `pytest`. Также в `core` есть `assert-zero` для проверки тензоров (что сумма квадратов градиента ≈ 0) — стандартный приём в тестах градиентов. Имена тестов склеиваются через `strcat` с префиксом `"test::"`, чтобы не было коллизий с пользовательскими символами.
 
-## 3.13 Что увидел интерпретатор
+## 3.13 Гомоиконность: код как данные (v2.3.0+)
+
+QLISP — гомоиконный язык: программа и данные имеют одинаковую структуру (S-выражения). С v2.3.0 в рантайме доступны примитивы для прямой работы с этой эквивалентностью: можно парсить строки в код, сериализовать код обратно, исполнять построенные программы, инспектировать замыкания.
+
+### READ-FROM-STRING / WRITE-TO-STRING
+
+```lisp
+(read-from-string "(+ 1 2)")     ; → (+ 1 2)   (S-выражение)
+(write-to-string '(+ 1 2))       ; → "(+ 1 2)" (строка)
+```
+
+> 🐍 Аналог `ast.literal_eval("(1 + 2)")` и `ast.unparse(...)` в Python — но здесь выражения нативные для языка, а не отдельное AST-дерево.
+
+### EVAL — вычисление в рантайме
+
+```lisp
+(eval '(+ 1 2))                              ; → 3
+(eval (read-from-string "(* 6 7)"))          ; → 42
+(setq expr '(lambda (x) (* x x)))
+(eval expr 5)                                ; → 25
+```
+
+> 🐍 Аналог `eval("1 + 2")` в Python. В QLISP `eval` работает с самими S-выражениями, без строкового прохода.
+
+### FUNCTIONP / FUNCTION-PARAMS / FUNCTION-BODY / FUNCTION-ENV
+
+```lisp
+(defun square (x) (* x x))
+
+(functionp 'square)          ; → T  (это замыкание)
+(function-params 'square)    ; → (X)        (список параметров)
+(function-body 'square)      ; → ((* X X))  (тело как S-выражение)
+(function-env 'square)       ; → nil для defun (глобальный env)
+```
+
+`FUNCTION-BODY` возвращает код лямбды как данные — основы для метапрограммирования (генерация кода, lint, автодокументация). В Python аналог — `inspect.getsource`, но здесь возвращается **структурное** представление, а не исходный текст.
+
+### SYMBOL-NAME
+
+```lisp
+(symbol-name 'hello)         ; → "HELLO"  (после intern — uppercase)
+(symbol-name '|+ 1 2|)       ; → "+"  (внутри bars — verbatim)
+```
+
+> 🐍 Аналог `str(identifier)` для имён, не для значений. В Python такого нет — имена и значения разнесены.
+
+### BOUNDP
+
+```lisp
+(boundp 'undefined-var)      ; → nil  (не определена)
+(defvar x 42)
+(boundp 'x)                  ; → T
+```
+
+Полезно в макросах и meta-circular interpreter'ах: «определена ли переменная?» без чтения значения.
+
+### SET-READER-MACRO
+
+```lisp
+(set-reader-macro 'p (lambda (stream) '(print "hi")))
+'p  ; в REPL автоматически напечатает "hi"
+```
+
+Подробнее — в гл. 12.
+
+### RANDINT
+
+```lisp
+(randint 10)                 ; → 0..9
+(randint 5 10)               ; → 5..9
+```
+
+> 🐍 Аналог `random.randint(a, b)`. Существующий `(rand)` в stdlib — для [0,1] float, `(randn)` — гауссово.
+
+### IMPORT-FROM (v2.3.0+)
+
+Частичный импорт вместо `import`:
+
+```lisp
+(import-from (dl linear train-step train-epochs))
+;; поднимает только LINEAR, TRAIN-STEP, TRAIN-EPOCHS
+;; остальное содержимое dl (net-forward, layer-w, ...) остаётся недоступным
+```
+
+> 🐍 Аналог `from sklearn.ensemble import RandomForestClassifier` в Python — но без скрытого `import sklearn` (модуль целиком не загружается как имя в глобальный env).
+
+## 3.14 Что увидел интерпретатор
 
 Когда вы набираете `(+ 1 2)` в REPL:
 
