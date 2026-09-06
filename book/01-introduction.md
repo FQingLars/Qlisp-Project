@@ -69,6 +69,8 @@ Source → CharStream → Reader → SExpr (ConsCellPool)
 
 В ядре QLISP — полный GOFAI-стек: pattern matching (`match`), структурная унификация с occurs-check (`unify`/`subst`), property lists (`put`/`get`/`remprop`/`symbol-plist`), forward-chaining rule engine (`defrule`/`assert-fact`/`run-rules`/`query`), backtracking (`amb-let`/`require`/`amb-collect`), compiler-macros. И поверх — нейросимвольный маршрутизатор: `NS-IF` маршрутизирует данные в одну из нейросетевых ветвей, `NS-GRAD!` через guilt detector направляет градиент только в виновный сегмент (v2.2.0+ — per-sample маршрутизация, OR-aware `resolve_correct`, softmax-weighted STE).
 
+С v2.3.4 поверх этого работает **движок susuwatari** (NS-RL, роадмап T1–T4): REINFORCE-ядро на примитивах языка (`SAMPLE`/`reinforce-loss!`), макро-слоты политики с песочницей исполнения (`EVAL-SANDBOXED`), RL-агент-кодер, который пишет QLISP-код текстом и переобучает слоты заменой формы, и маршрутизация по слотам (`ns-route*`). Подробности — гл. 14.9–14.10.
+
 ## 1.4 Где QLISP уместен
 
 - **Обучение и инференс моделей**, где важна производительность нативного кода и отсутствие пауз GC.

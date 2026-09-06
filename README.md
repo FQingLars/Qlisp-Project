@@ -2,7 +2,7 @@
 
 **Ориентировочная книга по языку программирования QLISP** — компилируемому Лиспу для машинного обучения и AI.
 
-QLISP — это диалект Лиспа, который компилируется в нативный машинный код через LLVM, со встроенной тензорной системой (F16-поддержка с v2.2.0), автоградиентом, HLO-компиляцией с AOT-инференсом и нейросимвольным движком (rule engine, унификация, `NS-IF`/`NS-GRAD!` с v2.2.0+) — всё в стандартной библиотеке, без единого `pip install`. Серия v2.3.x принесла: гомоиконность (`EVAL`/`READ-FROM-STRING`/`FUNCTION-BODY`/`SYMBOL-NAME`), QSRD v2 для бинарной сериализации, модуль `string`, частичный импорт `IMPORT-FROM`, переписанный `dl` со слоями-как-данными, переживающий границы форм gradient tape, in-process LLD для HLO-компиляции, производительность уровня PyTorch на ключевых операциях (SIMD-редукции, тайловый transpose, векторизованный softmax, memcpy-im2col conv), нейросимвольное RL-ядро (`SAMPLE`, макро-слоты, `EVAL-SANDBOXED`, REINFORCE), маршрутизацию внутри HLO-графа (`ROUTE`-нода, `HLO-ROUTE-GRAD!` без ленты), граф-как-данные (`GRAPH-DATA`/`GRAPH-FROM-DATA`/`GRAPH-RUN-PASSES`) и полноценный LSP-сервер (диагностики, навигация по воркспейсу, folding, форматирование).
+QLISP — это диалект Лиспа, который компилируется в нативный машинный код через LLVM, со встроенной тензорной системой (F16-поддержка с v2.2.0), автоградиентом, HLO-компиляцией с AOT-инференсом и нейросимвольным движком (rule engine, унификация, `NS-IF`/`NS-GRAD!` с v2.2.0+) — всё в стандартной библиотеке, без единого `pip install`. Серия v2.3.x принесла: гомоиконность (`EVAL`/`READ-FROM-STRING`/`FUNCTION-BODY`/`SYMBOL-NAME`), QSRD v2 для бинарной сериализации, модуль `string`, частичный импорт `IMPORT-FROM`, переписанный `dl` со слоями-как-данными, переживающий границы форм gradient tape, in-process LLD для HLO-компиляции, производительность уровня PyTorch на ключевых операциях (SIMD-редукции, тайловый transpose, векторизованный softmax, memcpy-im2col conv), нейросимвольное RL-ядро (`SAMPLE`, макро-слоты, `EVAL-SANDBOXED`, REINFORCE), маршрутизацию внутри HLO-графа (`ROUTE`-нода, `HLO-ROUTE-GRAD!` без ленты), граф-как-данные (`GRAPH-DATA`/`GRAPH-FROM-DATA`/`GRAPH-RUN-PASSES`), полноценный LSP-сервер (диагностики, навигация по воркспейсу, folding, форматирование) и нейросимвольный RL-движок **susuwatari** (агент-кодер, слоты, песочница).
 
 Книга написана для **инженеров с Python-бэкграундом**: каждая глава содержит аналогии с Python, NumPy, PyTorch и scikit-learn.
 
@@ -23,7 +23,7 @@ QLISP — это диалект Лиспа, который компилируе�
 | [11. GPU](book/11-gpu.md) | Устройства, статус CUDA-бэкенда | `.to('cuda')` |
 | [12. Макросы](book/12-macros.md) | Код-как-данные, backquote, compiler macros, `EVAL`/`READ-FROM-STRING` | декораторы, метаклассы |
 | [13. ООП](book/13-oop.md) | defstruct, defclass, дженерики (CLOS) | `class`, `@dataclass` |
-| [14. Символьное программирование](book/14-symbolic-programming.md) | match, unify, rule engine, amb, `NS-IF`/`NS-GRAD!` | `match-case`, Prolog |
+| [14. Символьное программирование](book/14-symbolic-programming.md) | match, unify, rule engine, amb, `NS-IF`/`NS-GRAD!`, движок susuwatari (NS-RL) | `match-case`, Prolog |
 | [15. Стандартная библиотека](book/15-standard-library.md) | IO, Regex, Audio, Datetime, Errors, Visual, **String** | `re`, `open`, `datetime` |
 | [16. Пакеты и FFI](book/16-packages-and-ffi.md) | qvalent, pkg-install, FFI: dlopen+FFI-CALL/IMPORT | `pip`, `ctypes` |
 | [17. Разбор примеров](book/17-full-examples.md) | Линейная регрессия и XOR-MLP с Python-эквивалентами | end-to-end туториалы |

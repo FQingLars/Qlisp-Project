@@ -179,6 +179,7 @@
 | `(second-best scores)` | второй максимум (ties → соседнее вхождение; откат маршрута) |
 | `(slot-set 'name form)` / `(eval-sandboxed form b)` | макро-слот + безопасный eval (нет аналога) |
 | `(ns-route logits slots)` | маршрутизация по макро-слотам (нет аналога) |
+| `(ns-train-coder! ...)` | RL-агент-кодер: 2-шаговый REINFORCE с baseline (нет аналога) |
 
 ## 18.8 Строки, файлы, прочее
 

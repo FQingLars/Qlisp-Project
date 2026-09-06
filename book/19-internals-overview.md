@@ -193,6 +193,7 @@ Range_fn генерируется только для полностью fused �
 - `GuiltDetector::detect(router, labels)` → `GuiltVerdict { kind, guilty_hop, per_sample_hop, per_sample_kind }`.
 - `NS-IF` (`do_ns_if`) выбирает ветвь per-sample по argmax, записывает хоп, исполняет ветвь первого образца (для чистого батча; для смешанного — маршрут/guilt per-sample, но исполнение одно).
 - `NS-GRAD!` (`do_ns_grad`) блокирует tape-узлы виновных ветвей, добавляет softmax-weighted STE в `decision_logits->grad`.
+- С v2.3.4 роутер работает и поверх макро-слотов (`ns-route`/`ns-route-sample`/`ns-route-index`): NS-RL-движок susuwatari (T1–T4) живёт на уровне stdlib + примитивов `SAMPLE`/`EVAL-SANDBOXED` — гл. 14.10.
 
 ## 19.11 LSP
 
