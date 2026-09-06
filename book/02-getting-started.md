@@ -5,9 +5,11 @@
 ### Готовый бинарник (Linux)
 
 ```bash
-curl -L https://github.com/FQingLars/QLISP/releases/latest/download/qlisp-linux-x86_64 -o qlisp
+curl -L https://github.com/FQingLars/Qlisp-Project/releases/latest/download/qlisp-linux-x86_64 -o qlisp
 chmod +x qlisp && mv qlisp ~/.local/bin/
 ```
+
+Бинарники (`qlisp`, `qlispc`, `qlisp-lsp`, `qvalent`) публикуются в релизах этого репозитория и собираются CI из исходников компилятора (Linux x86_64; Windows — MSYS2 MinGW64). Контрольные суммы — в файле `SHA256SUMS` рядом с ассетами релиза.
 
 ### Готовый бинарник (Windows)
 
@@ -15,16 +17,18 @@ chmod +x qlisp && mv qlisp ~/.local/bin/
 
 ### Сборка из исходников
 
+Исходники компилятора распространяются с деревом разработки и в открытый репозиторий не публикуются — если у вас есть исходное дерево (например, вместе с доступом к разработке), сборка стандартная:
+
 ```bash
-git clone https://github.com/FQingLars/QLISP.git && cd QLISP
+cd <корень исходников>
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
 ```
 
-Требования: GCC 13+ / Clang 16+ (C++20), CMake 3.16+, **LLVM 22+** (для AOT-компиляции), OpenBLAS, OpenMP. GPU: CUDA Toolkit (опционально, код присутствует, но не тестирован).
+Требования: GCC 13+ / Clang 16+ (C++20), CMake 3.16+, **LLVM 22+** (для AOT-компиляции), OpenBLAS, OpenMP (для линковки HLO-кернелов in-process — также `lld-22 liblld-22-dev`; Debian-style линкеры требуют явный `-lz -lzstd`). GPU: CUDA Toolkit (опционально, код присутствует, но не тестирован).
 
-Кросс-компиляция (в т.ч. Windows с Linux-машины через MinGW) описана в `README.md` исходного репозитория (`cmake/x86_64-w64-mingw32.cmake`).
+Кросс-компиляция вспомогательных бинарников (`qlisp-lsp`/`qvalent`) под Windows с Linux-машины через MinGW описана в `README.md` исходного дерева (`cmake/x86_64-w64-mingw32.cmake`); для `qlisp`/`qlispc` корректный путь — нативная MSYS2-сборка (см. гл. 19).
 
 ## 2.2 Четыре инструмента
 
@@ -112,7 +116,12 @@ qlispc compile --llvm hello.qlsp -o hello.ll
 
 ## 2.7 Редактор и LSP
 
-`qlisp-lsp` — Language Server без внешних зависимостей (JSON-парсер встроен в `src/lsp/server.cpp`): автодополнения с hover-документацией, переход к определению для `defun`, `defvar`, `defmacro`, `defclass`, `defstruct`, `defhloop`, `defrule`.
+`qlisp-lsp` — Language Server без внешних зависимостей (JSON-парсер встроен, движок и LLVM не линкуются). Начиная с v2.3.8 это полноценный сервер:
+
+- **Диагностики**: незакрытая форма (с позицией открывающей скобки), лишняя `)`, незакрытая строка — точные диапазоны, инкрементальная синхронизация документа (`change: 2`).
+- **Навигация**: goto-definition (в т.ч. cross-file), references, documentHighlight, rename по всему воркспейсу, `workspace/symbol`, `documentSymbol` (14 def-видов: `defun`/`defmacro`/`defvar`/`defhloop`/… + `deftest`).
+- **Комфорт**: folding ranges (пары скобок на разных строках), форматирование с Lisp-отступами (тело `defun`/`let`/`if` = col+2, аргументы выравниваются после головы).
+- Автодополнения (~140 встроенных символов с hover-документацией по примитивам).
 
 - **VS Code**: любой LSP-клиент, команда запуска `qlisp-lsp`.
 - **neovim**: `nvim-lspconfig` с custom config.

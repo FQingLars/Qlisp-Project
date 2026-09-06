@@ -225,7 +225,33 @@ print(model(X))  # → [[~0], [~1], [~1], [~0]]
 
 Подробности — в гл. 10 (HLO-компиляция).
 
-## 8.6 Известные ограничения DL v2
+## 8.6 Инференс без ленты и REINFORCE (v2.3.4+)
+
+### `net-infer` / `net-infer-apply` — tape-free инференс
+
+Обучающие `!`-операции внутри `net-forward` пишут на ленту, а контракт B0 запрещает tape-опы без `GRAD!` в итерации `while`. Для инференса в циклах модуль `dl` предоставляет tape-free варианты (коммит `c08f5a7`):
+
+```lisp
+(net-infer model x)          ;; forward без записи на ленту
+(net-infer-apply model x fn) ;; применить fn к результату прохода
+```
+
+> 🐍 Аналог `with torch.no_grad(): model(x)` — но без контекста: это просто другие функции, и в горячем `while` они не создают нод ленты вовсе.
+
+### REINFORCE: `SAMPLE` и `reinforce-loss!`
+
+В ядре появился примитив **`SAMPLE`** (категориальный softmax-сэмплинг one-hot действий, детерминированный сид как у `RANDN`; невыбранные слоты заполняются нулями явно). В `stdlib/dl.qlsp` на нём построено REINFORCE-ядро:
+
+```lisp
+(defvar action (sample logits))               ;; one-hot [batch, N]
+(reinforce-loss! logits action-index reward)  ;; reward × CROSS-ENTROPY!(logits, index)
+```
+
+- `reinforce-loss!` = reward × `CROSS-ENTROPY!(logits, action-index)` с градиентом `reward·(p − onehot)`; таргеты — целочисленные индексы `[batch]`, upstream-градиент (множитель reward) протаскивается (фикс `CROSS-ENTROPY!`, 2.3.4).
+- Полный REINFORCE с baseline — в stdlib (`tests/nsrl_t1.qlsp`: ручные значения CE, знаки градиентов при ±reward, детерминированный 2-рукий бандит сходится).
+- RL-надстройка (макро-слоты, `EVAL-SANDBOXED`, роутинг) — в гл. 12 и 14.
+
+## 8.7 Известные ограничения DL v2
 
 - **Нет автоматической трассировки `model.forward`.** Чтобы скомпилировать в HLO, нужно вручную собрать cons-граф из параметров — `(graph-param w)`, `(graph-param b)`, и т.д. Удобство в том, что это явное.
 - **Нет `nn.Module`-подобной интроспекции.** Чтобы получить список параметров модели, нужно рекурсивно обойти cons-список — `opt-apply` делает это внутри.

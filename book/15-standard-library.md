@@ -62,6 +62,7 @@
 | `CHAR-CODE ch` | ASCII-код символа | `ord(ch)` |
 | `CODE-CHAR n` | символ по ASCII-коду | `chr(n)` |
 | `STRING-TO-NUMBER s` | парсинг числа | `float(s)` / `int(s)` |
+| `STRING-CONTAINS s sub` | предикат вхождения (примитив с v2.3.7) | `sub in s` |
 | `STRING< a b` | лексикографическое `<` | `a < b` (для строк) |
 
 ### Композитные (на примитивах, в `stdlib/string.qlsp`)
@@ -69,7 +70,7 @@
 ```lisp
 (import STRING)
 
-(string-contains s sub)         ; STRING-INDEX, потом nil-check
+(string-contains s sub)         ; STRING-INDEX, потом nil-check (с v2.3.7 есть и примитив STRING-CONTAINS)
 (string-starts-with s prefix)
 (string-ends-with s suffix)
 (string-slice s start end)      ; подстрока
@@ -179,6 +180,8 @@
 (try (risky-op)
   (e (print (error-msg e))))       ;; try/catch
 ```
+
+С v2.3.4 `CATCH-ERROR` — настоящий примитив: возвращает `((T result) | (NIL "message"))`, поэтому `try` сохраняет результат тела (а не только обрабатывает ошибку); сглатывающий throw-стаб из `pkg.qlsp` удалён (см. гл. 12.6).
 
 > 🐍 `try`-макрос ≈ `try/except e:`. Внутри `try` оборачивает body в `(lambda () body)` и вызывает через `catch-error`; ошибка связывается с символом из `catch-clause`.
 

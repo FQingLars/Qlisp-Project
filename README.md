@@ -2,7 +2,7 @@
 
 **Ориентировочная книга по языку программирования QLISP** — компилируемому Лиспу для машинного обучения и AI.
 
-QLISP — это диалект Лиспа, который компилируется в нативный машинный код через LLVM, со встроенной тензорной системой (F16-поддержка с v2.2.0), автоградиентом, HLO-компиляцией с AOT-инференсом и нейросимвольным движком (rule engine, унификация, `NS-IF`/`NS-GRAD!` с v2.2.0+) — всё в стандартной библиотеке, без единого `pip install`. v2.3.0 приносит гомоиконность (`EVAL`/`READ-FROM-STRING`/`FUNCTION-BODY`/`SYMBOL-NAME`), QSRD v2 для бинарной сериализации, модуль `string`, частичный импорт `IMPORT-FROM`, переписанный `dl` со слоями-как-данные, переживающий границы форм gradient tape и in-process LLD для HLO-компиляции.
+QLISP — это диалект Лиспа, который компилируется в нативный машинный код через LLVM, со встроенной тензорной системой (F16-поддержка с v2.2.0), автоградиентом, HLO-компиляцией с AOT-инференсом и нейросимвольным движком (rule engine, унификация, `NS-IF`/`NS-GRAD!` с v2.2.0+) — всё в стандартной библиотеке, без единого `pip install`. Серия v2.3.x принесла: гомоиконность (`EVAL`/`READ-FROM-STRING`/`FUNCTION-BODY`/`SYMBOL-NAME`), QSRD v2 для бинарной сериализации, модуль `string`, частичный импорт `IMPORT-FROM`, переписанный `dl` со слоями-как-данными, переживающий границы форм gradient tape, in-process LLD для HLO-компиляции, производительность уровня PyTorch на ключевых операциях (SIMD-редукции, тайловый transpose, векторизованный softmax, memcpy-im2col conv), нейросимвольное RL-ядро (`SAMPLE`, макро-слоты, `EVAL-SANDBOXED`, REINFORCE), маршрутизацию внутри HLO-графа (`ROUTE`-нода, `HLO-ROUTE-GRAD!` без ленты), граф-как-данные (`GRAPH-DATA`/`GRAPH-FROM-DATA`/`GRAPH-RUN-PASSES`) и полноценный LSP-сервер (диагностики, навигация по воркспейсу, folding, форматирование).
 
 Книга написана для **инженеров с Python-бэкграундом**: каждая глава содержит аналогии с Python, NumPy, PyTorch и scikit-learn.
 
@@ -33,11 +33,11 @@ QLISP — это диалект Лиспа, который компилируе�
 ## Быстрый старт
 
 ```bash
-# Скачать бинарник (Linux x86_64, релиз v2.3.0)
-curl -L https://github.com/FQingLars/QLISP/releases/latest/download/qlisp-linux-x86_64 -o qlisp
+# Скачать бинарник (Linux x86_64, релиз v2.3.8)
+curl -L https://github.com/FQingLars/Qlisp-Project/releases/latest/download/qlisp-linux-x86_64 -o qlisp
 chmod +x qlisp && mv qlisp ~/.local/bin/
 
-# Windows: qlisp-windows-x86_64.zip со страницы релизов (qlisp.exe, qlispc.exe)
+# Windows: qlisp-windows-x86_64.zip со страницы релизов (qlisp.exe, qlispc.exe, qlisp-lsp.exe, qvalent.exe)
 
 # Компилятор (AOT): qlispc — см. гл. 2
 
@@ -63,14 +63,15 @@ qlisp> (import ML)
 
 ## Статус книги
 
-Книга сопровождает **QLISP v2.3.0** — стабилизированную нейросимвольную маршрутизацию (per-sample guilt, OR-aware resolve_correct, HLO composite/broadcast/identity), миграцию памяти HibLin (Scope stable/scratch, TensorBufferPool + ConsCellPool + StableMemory), dtype F16 (`_Float16`/F16C kernels), гомоиконный рантайм (`EVAL`/`READ-FROM-STRING`/`FUNCTION-BODY`/`SYMBOL-NAME`), QSRD v2 (бинарный формат), 11 стандартных модулей (включая `string`), `IMPORT-FROM` для частичного импорта, переписанный модуль `dl` (слои как данные, переживают границы форм), gradient tape с корректным `reset_scratch`/`defvar_autograd` и in-process LLD для AOT HLO-компиляции (без `popen`).
+Книга сопровождает **QLISP v2.3.8**. Относительно v2.3.0 в книге отражены: фикс времени жизни градиентов и HLO-хендлов (2.3.1), корректность rule engine и завершение S7 (`SECOND-BEST`, 2.3.2), производительность тензоров/автограда до паритета с PyTorch и дисциплина памяти (soak-тесты, `while` без роста RSS, 2.3.3), нейросимвольное RL-ядро susuwatari T1–T4: REINFORCE, макро-слоты, `EVAL-SANDBOXED`, кодер и маршрутизация по слотам (2.3.4), ROUTE-нода в HLO-графе (2.3.5) и `HLO-ROUTE-GRAD!` — обучение роутера без ленты (2.3.6), граф-как-данные + продакшен-пайплайны + умная печать тензоров (2.3.7) и полноценный `qlisp-lsp` (2.3.8).
 
 Известные ограничения реализации (см. соответствующие разделы в книге):
 
 - CUDA-бэкенд (`src/gpu/kernels.cu`) присутствует, но **не тестирован на GPU**.
-- Windows: локальная кросс-компиляция `qlisp`/`qlispc` из Linux невозможна (SysV-ABI в host-LLVM несовместим с Win64 ABI). Используйте CI-релиз или MSYS2-сборку.
+- Windows: локальная кросс-компиляция `qlisp`/`qlispc` из Linux невозможна (SysV-ABI в host-LLVM несовместим с Win64 ABI). Используйте релизные бинарники (собираются в CI, MSYS2 MinGW64) или локальную MSYS2-сборку.
 - HLO-fallback (без `HLO-COMPILE`) держит константы формы трассировки — кросс-форменное использование такого HLOPROG небезопасно.
-- `ns-nested-breed-guilty` и `neurosym-rule-check` — два детерминированных фейла в test-suite, существовали до 2.3.0 и вне скоупа релиза.
+- Графы с `ROUTE` компилируются в fallback-программу; LLVM-диспетчер для ROUTE отложен (roadmap 1.2).
+- Известные фейлы ранних 2.3.x (`ns-nested-breed-guilty`, `neurosym-rule-check`) устранены в 2.3.1–2.3.2 (#28–#33); полный сюит к 2.3.8 зелёный в Release, ASan чист на ключевых путях.
 
 ## Лицензия
 

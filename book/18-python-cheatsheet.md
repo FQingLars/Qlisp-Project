@@ -97,6 +97,8 @@
 | `(sgd-step w lr)` | SGD `opt.step()` (на одном парам.) |
 | `(adam-step w lr)` | Adam `opt.step()` |
 | обычные `matmul`, `t+` (без `!`) | `with torch.no_grad():` |
+| `(sample logits)` | `torch.distributions.Categorical(logits).sample()` (one-hot) |
+| `(reinforce-loss! logits idx reward)` | REINFORCE: `reward * F.cross_entropy(logits, idx)` |
 
 ## 18.5 Слои (DL v2 ↔ torch.nn)
 
@@ -113,6 +115,7 @@
 | `(conv2d! x k s p)` | `F.conv2d(x, k, stride=s, padding=p)` |
 | `(maxpool2d! x k s)` | `F.max_pool2d(x, k, s)` |
 | `(weighted-lookup probs v1 v2)` | взвешенная сумма (скаляр) |
+| `(net-infer model x)` | `with torch.no_grad(): model(x)` (tape-free, для `while`) |
 
 > 🐍 Ключевое отличие: QLISP DL v2 — это **данные** (cons-список), а не объект. Модель сериализуется QSRD v2 как обычная структура. PyTorch-модель — объект с `state_dict`, требует отдельного протокола сериализации.
 
@@ -173,6 +176,9 @@
 | `(amb-let ...)` + `(require ...)` + `(amb-collect ...)` | `itertools.product` + backtracking |
 | `(ns-if logits (("a") branch-a) (("b") branch-b))` | tree-of-experts (нет аналога) |
 | `(ns-grad! loss 'cat)` | per-sample STE + guilt detector (нет аналога) |
+| `(second-best scores)` | второй максимум (ties → соседнее вхождение; откат маршрута) |
+| `(slot-set 'name form)` / `(eval-sandboxed form b)` | макро-слот + безопасный eval (нет аналога) |
+| `(ns-route logits slots)` | маршрутизация по макро-слотам (нет аналога) |
 
 ## 18.8 Строки, файлы, прочее
 
@@ -211,6 +217,9 @@
 | `(start-trace)` + `(graph-param x)` + `(hlo-compile out)` + `(hlo-run hlo x ...)` | `torch.compile` / `jax.jit` |
 | `(defuse! f (x) ...)` | `@torch.compile(fullgraph=True)` |
 | `(defuse f (x) ...)` | `@torch.compile` (с fallback) |
+| `(graph-data prog)` / `(graph-from-data d)` | `torch.fx` граф как данные + pickle |
+| `(graph-run-passes prog '("cse" "dce" "fusion"))` | прогон оптимизационных проходов |
+| `(hlo-route-grad! prog labels)` | backward обучаемой ROUTE-ноды без ленты |
 | `QLISP_TARGET_TRIPLE=aarch64-linux-gnu` | кросс-компиляция под ARM |
 
 ## 18.10 FFI
