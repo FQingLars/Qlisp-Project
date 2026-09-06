@@ -11,6 +11,8 @@ chmod +x qlisp && mv qlisp ~/.local/bin/
 
 Бинарники (`qlisp`, `qlispc`, `qlisp-lsp`, `qvalent`) публикуются в релизах этого репозитория и собираются CI из исходников компилятора (Linux x86_64; Windows — MSYS2 MinGW64). Контрольные суммы — в файле `SHA256SUMS` рядом с ассетами релиза.
 
+> ⚠️ **Рантайм (Linux).** Бинарники линкуются динамически с `libLLVM.so.22.1` — нужна полная сборка LLVM 22.1 с experimental-таргетами (например, `llvm-22` с apt.llvm.org). На системах с урезанным LLVM (например, ROCm-сборка без Xtensa) возможен `symbol lookup error: LLVMInitializeXtensaTargetInfo`. Проверка: `echo '(+ 1 2)' | qlisp`.
+
 ### Готовый бинарник (Windows)
 
 Скачайте `qlisp-windows-x86_64.zip` со страницы релизов и распакуйте; `qlisp.exe`, `qlispc.exe`, `qlisp-lsp.exe`, `qvalent.exe` готовы к работе (MinGW-сборка, x86_64).
