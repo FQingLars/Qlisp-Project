@@ -113,6 +113,8 @@ struct HloNode {
 (HLO-TRAIN-SGD ...)           ;; обучающий шаг прямо в скомпилированном графе
 ```
 
+С v2.7.1 (срез H4b) эти узлы больше не отправляются в фоллбэк: `SOFTMAX`, `ARGMAX`, `LOOKUP`, `WEIGHTED_LOOKUP` и CODEGEN-виды (`tanh`, `fabs`, `fneg`, `clamp01`, `copy`) компилируются в **нативные стенсилы** той же W^X-страницы — проверено: граф с `HLO-SOFTMAX` даёт `(HLO-STENCIL-P h)` → `T` и верные вероятности. Фоллбэк остаётся для графов с `ROUTE`, `COMPOSITE`/`TUPLE` и несовместимыми формами узлов.
+
 ## 10.5 `defun` vs `defuse` vs `defuse!`
 
 Три способа объявить функцию различаются тем, должен ли компилятор слить её тело в fused-кирнел:
@@ -227,4 +229,4 @@ void fn_range(float** params, float* out, long start, long end)
 - Стенсилы пока только для AVX2 x86-64 (SysV): иных целевых платформ у эмиттера нет.
 - `composite_expanded` флаг защищает от двойного разворачивания; identity-COMPOSITE (тело = сам параметр) коллапсируется в PARAM.
 - Fingerprint in-process-кэша использует `std::hash` — теоретические коллизии, <10⁻⁹ вероятность (`TEMP_ISSUES.md` #22); с 2.3.6 fingerprint включает branch-подграфы и метки.
-- Тесты: `tests/hlo_stencils.qlsp`, `tests/hlo_stencil_range.qlsp` (стенсилы и range-кернелы), прежние `hlo_*.qlsp`.
+- Тесты: `tests/hlo_stencils.qlsp`, `tests/hlo_stencil_range.qlsp`, `tests/hlo_stencil_ops.qlsp` (нативные кернелы H4b, включая батч-регрессию WEIGHTED_LOOKUP), прежние `hlo_*.qlsp`.

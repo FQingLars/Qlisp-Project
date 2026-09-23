@@ -6,14 +6,14 @@
 |---|---|---|---|
 | `core` | `stdlib/core.qlsp` | 94 строки | утилиты списков, `let*`, тестовый фреймворк |
 | `string` | `stdlib/string.qlsp` | (v2.3.0+) | строковые операции, char-коды, примитивы + композитные |
-| `ml` | `stdlib/ml.qlsp` | 337 строк | классический ML: KNN, NB, Tree, RF, GB, KMeans, CV, GridSearch |
+| `ml` | `stdlib/ml.qlsp` | 377 строк | классический ML: KNN, NB, Tree, RF, GB, KMeans, CV, GridSearch, потери |
 | `dl` | `stdlib/dl.qlsp` | 100+ строк (v2.3.0+) | слои-как-данные, `linear`, `net-forward`, `train-step`, `train-epochs` |
-| `io` | `stdlib/io.qlsp` | 44 строки | файлы, CSV, `slurp`, `spit` |
+| `io` | `stdlib/io.qlsp` | 66 строк | файлы, CSV (RFC-4180), `slurp`, `spit` |
 | `regex` | `stdlib/regex.qlsp` | 17 строк | регулярки: `re-find`, `re-replace`, `re-split` |
 | `audio` | `stdlib/audio.qlsp` | 101 строка | DSP: окна, синус, DFT, mel-шкала, dB |
 | `datetime` | `stdlib/datetime.qlsp` | 40 строк | время: `now-ts`, `sleep`, `elapsed` |
 | `pkg` | `stdlib/pkg.qlsp` | 77 строк | `pkg-install` через `http-get` |
-| `errors` | `stdlib/errors.qlsp` | 64 строки | `make-error`, `throw`, `assert`, `try` |
+| `errors` | `stdlib/errors.qlsp` | 65 строк | `make-error`, `throw`, `assert`, `try`, тип-предикаты |
 | `visual` | `stdlib/visual.qlsp` | 33 строки | TensorBoard-подобный HTTP-дашборд |
 
 > 🐍 «11 вшитых модулей в одном бинарнике» — это «один fat-пакет в одном бинарнике». Python-аналог: монолитный Docker-образ с предустановленными `numpy/torch/sklearn/tensorboard` — только без GIL и без 4 ГБ зависимостей.
@@ -110,10 +110,18 @@
 (spit "out.txt" "содержимое")      ;; записать                 open().write()
 (file? "out.txt")                  ;; существует?              os.path.exists
 (read-lines "data.txt")            ;; список строк             open().readlines()
-(read-csv "table.csv")             ;; список списков полей     csv.reader (базовый)
+(read-csv "table.csv")             ;; список списков полей     csv.reader
+(write-csv "out.csv" rows)         ;; строки → CSV-файл        csv.writer
 ```
 
-Нижележащие примитивы (в `src/eval/interpreter.cpp`): `READ-FILE`, `WRITE-FILE`, `FILE-EXISTS?`.
+CSV переписан по RFC-4180 (v2.7.1): поля с запятыми/кавычками/переводами строк берутся в кавычки, `""` — экранирование кавычки внутри поля, CRLF читается. Пустые строки пропускаются (семантика `skip_blank_lines=True` у pandas). Круговой рейс точен:
+
+```lisp
+(write-csv "/tmp/t.csv" (list (list "a" "b") (list "1" "2,5") (list "3" "4")))
+(read-csv "/tmp/t.csv")            ;; → (("a" "b") ("1" "2,5") ("3" "4"))
+```
+
+Реализация — на строковых примитивах (`STRING-SPLIT`/`STRING-JOIN`/`SUBSTR`), без посимвольных проходов; нижележащие примитивы файлов — `READ-FILE`/`WRITE-FILE`/`FILE-EXISTS?`.
 
 ## 15.4 REGEX — регулярные выражения
 
@@ -179,7 +187,15 @@
 (type-error? e) (value-error? e) (runtime-error? e)
 (try (risky-op)
   (e (print (error-msg e))))       ;; try/catch
+
+(is-fixnum? 5) (is-flonum? 2.5)    ;; точные предикаты типов    isinstance
+(is-number? 2.5) (is-string? "x")
+(is-cons? '(1)) (is-tensor? (tensor ((1.0))))
+(is-nil? nil)
+(assert-type v 'fixnum "v должен быть целым")
 ```
+
+С v2.7.1 предикаты — честные (по тегам значений, не по `type-of`-строкам); `type-check` проверяет по имени типа (`int`/`float`/`string`/`list`/`tensor`/`nil`).
 
 С v2.3.4 `CATCH-ERROR` — настоящий примитив: возвращает `((T result) | (NIL "message"))`, поэтому `try` сохраняет результат тела (а не только обрабатывает ошибку); сглатывающий throw-стаб из `pkg.qlsp` удалён (см. гл. 12.6).
 
@@ -246,12 +262,14 @@
 |---|---|---|
 | `core` | утилиты списков, `let*`, тесты | builtins + pytest |
 | `string` | строки, char-коды | `str` (Python 3.6+) |
-| `ml` | классический ML (337 строк на самом QLISP) | scikit-learn |
+| `ml` | классический ML + потери/softmax (377 строк на самом QLISP) | scikit-learn |
 | `dl` | слои-как-данные, `linear`/`net-forward`/`train-step` | `torch.nn` (стиль Sequential) |
-| `io` | файлы, CSV | `open`, `csv` |
+| `io` | файлы, CSV (RFC-4180, v2.7.1) | `open`, `csv` |
 | `regex` | регулярки | `re` |
 | `audio` | DSP, окна, FFT, STFT, mel | `scipy.signal`, `librosa` |
 | `datetime` | время | `time`, `datetime` |
 | `pkg` | пакеты из GitHub | `pip` (мини) |
 | `errors` | ошибки, try, assert | exceptions |
 | `visual` | дашборд метрик | TensorBoard |
+
+**Roadmap (TODO_TABLET.md).** Готовится модуль **Tablet** — DataFrame-аналог pandas на чистом QLisp поверх примитивов: типизированные колонки (тензоры для чисел, списки для строк/NA), стабильные сортировки, groupby/pivot/merge с детерминированным порядком, `tcsv-read`/`tcsv-write` на базе io. План из 8 фаз (T0–T8) описан в `TODO_TABLET.md` дерева компилятора.

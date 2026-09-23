@@ -143,7 +143,24 @@ NB: порядок аргументов в `stdlib/ml.qlsp:234` — `(data label
 `fit-fn` — функция вида `(lambda (tx ty) (lambda (x) (knn-predict x tx ty 3)))`.
 `score-fn` — `(lambda (preds y-true) (accuracy-score preds y-true))`.
 
+С v2.7.1 `grid-search` оценивает каждый вариант на всём `X` (исправлен баг: скорость считалась по несуществующему `test-x`).
+
 > 🐍 `cross_val_score(model, X, y, cv=k)` и `GridSearchCV(...)`.
+
+### Потери и активации над списками (v2.7.1)
+
+В `ml` добавлен список-ориентированный слой потерь — удобно для символьных/нейросимвольных пайплайнов, где значения ходят списками, а не тензорами:
+
+```lisp
+(softmax-list '(1.0 2.0 3.0))       ;; → (0.0900305... 0.2447284... 0.6652409...) (max-shift, стабильно)
+(log-softmax-list '(1.0 2.0 3.0))   ;; лог-вероятности без overflow
+(mse-loss '(1.0 2.0) '(1.5 2.5))    ;; → 0.25
+(mae-loss '(1.0 2.0) '(1.5 2.5))    ;; → 0.5
+(cross-entropy-list pred target)    ;; цели — one-hot или мягкие метки
+(one-hot 1 3)                       ;; → (0.0 1.0 0.0)  (k n): единица на позиции k
+```
+
+> 🐍 `torch.nn.functional.softmax(..., dim=-1)` (max-shift внутри), `nn.MSELoss`, `nn.CrossEntropyLoss` — только над списками, а не тензорами.
 
 ## 9.11 End-to-end пример
 

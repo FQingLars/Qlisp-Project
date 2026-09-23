@@ -171,7 +171,7 @@ class GradientTape {  // thread_local singleton
 
 Граф из узлов `HloOp` (см. `src/hlo/graph.hpp`): `PARAMETER, CONSTANT, DOT, ADD, MUL, RELU, FUSION, TUPLE, OUTPUT, LOOKUP, ARGMAX, SOFTMAX, COMPOSITE, CODEGEN, WEIGHTED_LOOKUP, ROUTE` (ROUTE — v2.3.5: branch-подграфы, OR-overlap-метки, per-sample taken внутри ноды; clone/merge на pointer-identity maps, DCE держит ветви живыми, CSE не сливает ROUTE-ноды).
 
-Оптимизации: CSE, DCE, fusion поэлементных цепочек, broadcast-shape, COMPOSITE-expansion. Кодоген (`src/codegen/hlo_codegen.cpp`): **единый стенсил-эмиттер** `compile_hlo_stencil` (v2.7.0) — один проход по графу выписывает байтовые AVX2-стенсилы с «дырками» (imm-формы, rel32, movabs-адреса хелперов), патчит их и копирует в W^X-страницу процесса. Кернел — C-ABI-функция `void fn(float** params, float* out)`; узел `DOT` → `call cblas_sgemm` (адрес прошивается movabs-патчем). Промежуточного IR нет — LLVM-путь (IR → объектник → lldELF → .so → dlopen) удалён в v2.7.0.
+Оптимизации: CSE, DCE, fusion поэлементных цепочек, broadcast-shape, COMPOSITE-expansion. Кодоген (`src/codegen/hlo_codegen.cpp` → `hlo_stencil.cpp`): **единый стенсил-эмиттер** `compile_hlo_stencil` (v2.7.0) — один проход по графу выписывает байтовые AVX2-стенсилы с «дырками» (imm-формы, rel32, movabs-адреса хелперов), патчит их и копирует в W^X-страницу процесса. Кернел — C-ABI-функция `void fn(float** params, float* out)`; узел `DOT` → `call cblas_sgemm` (адрес прошивается movabs-патчем). Подмножество (v2.7.1, срезы H4a/H4b): PARAMETER, скалярный CONSTANT, DOT, ADD/MUL/RELU, CODEGEN (`tanh`/`fabs`/`fneg`/`clamp01`/`copy`), SOFTMAX, ARGMAX, LOOKUP, WEIGHTED_LOOKUP; фоллбэк — для ROUTE, COMPOSITE/TUPLE. Промежуточного IR нет — LLVM-путь (IR → объектник → lldELF → .so → dlopen) удалён в v2.7.0.
 
 Кэш — in-process по fingerprint (версия эмиттера + shape-ключ; с v2.3.6 включает branch-подграфы и метки). Дискового кэша больше нет. Fallback: граф вне компилируемого подмножества → интерпретация клонированного графа (`HloGraph::clone()`); `HLO-RUN` с v2.3.7 защищён arg-count guard (ошибка вместо SIGSEGV).
 
@@ -264,6 +264,7 @@ cmake -B build-windows \
 | qvalent кэш | `$HOME/.cache/qlisp/<deployer>/<repo>/` |
 | QSRD v2 magic | `"QSRD"` (u16 ver) |
 | Тесты | сюит зелёный (Release, Linux); ASan чисто на HLO/NS/tape-путях; soak-харнесс без роста RSS |
+| Контракт CI (v2.7.1) | `run-tests` считает падения в `*test-failed*`; процесс возвращает 1 при любом упавшем сюите |
 | LSP | инкрементальный sync (change:2), cross-file def/refs/rename, folding, formatting (v2.3.8) |
 
 ## 19.14 Известные ограничения (см. TEMP_ISSUES.md и TODO.md)
@@ -281,4 +282,4 @@ cmake -B build-windows \
 
 ---
 
-Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы). Тесты — 64 сюита в `tests/`, включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_range.qlsp`, `homoiconic.qlsp`.
+Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы). Тесты — 63 сюита в `tests/`, включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_range.qlsp`, `hlo_stencil_ops.qlsp`, `stdlib_losses.qlsp`, `homoiconic.qlsp`.

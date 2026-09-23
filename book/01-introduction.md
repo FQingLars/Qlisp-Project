@@ -107,7 +107,7 @@ Source → CharStream → Reader → SExpr (ConsCellPool)
 - **v2.6.0** — `SAVE-IMAGE`/`LOAD-IMAGE`: образ мира как данные (`.qimg`, формат QLSI: S-манифест + тензорные блобы); нативное состояние не сериализуется и восстанавливается лениво (гл. 21).
 - **v2.6.1–v2.6.3** — AVX2-стенсилы HLO, range-кёрнелы (`HLO-HAS-RANGE`), fail-loudly `tref`.
 - **v2.7.0** — единый стенсил-эмиттер `compile_hlo_stencil`: LLVM-путь и дисковый кэш HLO удалены, интроспекция `HLO-STENCIL-P` (гл. 10).
-- **v2.7.1** — mingw-портируемость: первый полностью зелёный CI на Linux и Windows.
+- **v2.7.1** — mingw-портируемость (полностью зелёный CI на Linux и Windows); срезы H4a/H4b: нативные стенсилы для `SOFTMAX`/`ARGMAX`/`LOOKUP`/`WEIGHTED_LOOKUP` и CODEGEN-видов (`tanh`/`fabs`/`fneg`/`clamp01`/`copy`); stdlib: CSV по RFC-4180, честные тип-предикаты, потери и стабильный softmax в `ml` (гл. 9, 10, 15).
 
 Лицензия компилятора сменилась с MIT на **GPLv3** (сама книга — по-прежнему MIT).
 

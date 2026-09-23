@@ -167,6 +167,10 @@
 | `(cross-val-score X y k fit score)` | `cross_val_score(cv=k)` |
 | `(grid-search X y params fit score)` | `GridSearchCV` |
 | `(linear-kernel a b)` / `(rbf-kernel a b g)` | kernels из `sklearn.metrics.pairwise` |
+| `(softmax-list xs)` / `(log-softmax-list xs)` | `torch.softmax` / `log_softmax` (стабильный max-shift) |
+| `(mse-loss pred target)` / `(mae-loss ...)` / `(cross-entropy-list ...)` | `nn.MSELoss` / `nn.L1Loss` / `nn.CrossEntropyLoss` |
+| `(one-hot k n)` | `one_hot` / `np.eye(n)[k]` |
+| `(is-fixnum? v)` / `(is-flonum? v)` / `(is-string? v)` / `(is-tensor? v)` | `isinstance(v, ...)` |
 | `(sigmoid-kernel a b alpha c)` | `tanh(α·⟨a,b⟩+c)` |
 
 ## 18.7 Символьный и нейросимвольный слой
