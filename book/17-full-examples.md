@@ -59,7 +59,7 @@
 | `train-loop` | Рекурсия-цикл: forward, loss, backward, шаг SGD | `for i in range(200): loss.backward(); opt.step()` |
 | `(grad! loss)` | Backward по ленте | `loss.backward()` |
 | `(sgd-step w lr)` | Обновление весов на месте | `w -= lr * w.grad` |
-| `(start-trace)…(hlo-compile)` | Трассировка forward в граф и AOT-компиляция | `compiled = torch.compile(lambda x: x @ w + b)` |
+| `(start-trace)…(hlo-compile)` | Трассировка forward в граф и стенсил-компиляция | `compiled = torch.compile(lambda x: x @ w + b)` |
 | `(hlo-run hlo ...)` | Нативный инференс | `compiled(x_test)` |
 
 Обратите внимание: тензоры-константы записываются как `(tensor ((2.0)))` — скаляр в форме `[1,1]`, чтобы избежать сюрпризов broadcasting'а.
@@ -143,7 +143,7 @@ for epoch in range(1, 501):
 1. **Нет `optimizer.zero_grad()`** — лента QLISP очищается в `GRAD!` автоматически (после backward).
 2. **Нет `torch.no_grad()`** — разграничение train/inference-операций делается выбором `!`/без-`!` (`matmul!` vs `matmul`).
 3. **Рекурсия вместо `for`** — идиоматично для Лиспа, `while` тоже доступен (через `while …`).
-4. **HLO-инференс** — отдельный этап: трассировка → компиляция (AOT `llc → g++ -shared → dlopen`) → нативный вызов. В PyTorch это `torch.compile`, в QLISP — язык первого класса.
+4. **HLO-инференс** — отдельный этап: трассировка → стенсил-компиляция (`compile_hlo_stencil`, W^X-страница, без LLVM) → нативный вызов. В PyTorch это `torch.compile`, в QLISP — язык первого класса.
 
 ## 17.3 Идеи для упражнений
 

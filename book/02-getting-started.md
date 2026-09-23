@@ -9,13 +9,13 @@ curl -L https://github.com/FQingLars/Qlisp-Project/releases/latest/download/qlis
 chmod +x qlisp && mv qlisp ~/.local/bin/
 ```
 
-Бинарники (`qlisp`, `qlispc`, `qlisp-lsp`, `qvalent`) публикуются в релизах этого репозитория и собираются CI из исходников компилятора (Linux x86_64; Windows — MSYS2 MinGW64). Контрольные суммы — в файле `SHA256SUMS` рядом с ассетами релиза.
+Бинарники (`qlisp`, `qlisp-lsp`, `qvalent`) публикуются в релизах этого репозитория и собираются CI из исходников компилятора (Linux x86_64; Windows — MSYS2 MinGW64). Контрольные суммы — в файле `SHA256SUMS` рядом с ассетами релиза.
 
-> ⚠️ **Рантайм (Linux).** Бинарники линкуются динамически с `libLLVM.so.22.1` — нужна полная сборка LLVM 22.1 с experimental-таргетами (например, `llvm-22` с apt.llvm.org). На системах с урезанным LLVM (например, ROCm-сборка без Xtensa) возможен `symbol lookup error: LLVMInitializeXtensaTargetInfo`. Проверка: `echo '(+ 1 2)' | qlisp`.
+> ✅ **Рантайм (Linux, v2.7.0+).** Бинарник больше **не линкуется с LLVM** — динамические зависимости скромные: `libopenblas`, `libgomp`, `libstdc++`, `libc` (плюс `libgfortran` косвенно, через OpenBLAS). Достаточно `apt install libopenblas0` (или эквивалента). Проверка: `echo '(+ 1 2)' | qlisp`.
 
 ### Готовый бинарник (Windows)
 
-Скачайте `qlisp-windows-x86_64.zip` со страницы релизов и распакуйте; `qlisp.exe`, `qlispc.exe`, `qlisp-lsp.exe`, `qvalent.exe` готовы к работе (MinGW-сборка, x86_64).
+Скачайте `qlisp-windows-x86_64.zip` со страницы релизов и распакуйте; `qlisp.exe`, `qlisp-lsp.exe`, `qvalent.exe` готовы к работе (MinGW-сборка, x86_64; начиная с v2.7.1 — полностью зелёный CI).
 
 ### Сборка из исходников
 
@@ -23,25 +23,23 @@ chmod +x qlisp && mv qlisp ~/.local/bin/
 
 ```bash
 cd <корень исходников>
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
 ```
 
-Требования: GCC 13+ / Clang 16+ (C++20), CMake 3.16+, **LLVM 22+** (для AOT-компиляции), OpenBLAS, OpenMP (для линковки HLO-кернелов in-process — также `lld-22 liblld-22-dev`; Debian-style линкеры требуют явный `-lz -lzstd`). GPU: CUDA Toolkit (опционально, код присутствует, но не тестирован).
+Требования: GCC 13+ / Clang 16+ (C++20), CMake 3.16+, OpenBLAS, OpenMP. **LLVM не нужен** — с v2.7.0 весь нативный код (JIT замыканий и HLO-кёрнелы) строится собственными стенсил-эмиттерами (гл. 10, 20). GPU: CUDA Toolkit (опционально, код присутствует, но не тестирован).
 
-Кросс-компиляция вспомогательных бинарников (`qlisp-lsp`/`qvalent`) под Windows с Linux-машины через MinGW описана в `README.md` исходного дерева (`cmake/x86_64-w64-mingw32.cmake`); для `qlisp`/`qlispc` корректный путь — нативная MSYS2-сборка (см. гл. 19).
+Кросс-компиляция вспомогательных бинарников (`qlisp-lsp`/`qvalent`) под Windows с Linux-машины через MinGW описана в `README.md` исходного дерева (`cmake/x86_64-w64-mingw32.cmake`); для `qlisp` корректный путь — нативная MSYS2-сборка (см. гл. 19).
 
-## 2.2 Четыре инструмента
+## 2.2 Три инструмента
 
 | Инструмент | Назначение | Python-аналог |
 |---|---|---|
-| `qlisp` | REPL + интерпретатор `.qlsp` | `python` |
-| `qlispc` | Компилятор: `.qlsp` → LLVM IR → нативный бинарник | `cython`/`nuitka` |
+| `qlisp` | REPL + интерпретатор `.qlsp` + JIT (нативный код на лету) | `python` |
 | `qlisp-lsp` | Language Server (VS Code, neovim, Emacs) | pylance |
 | `qvalent` | Пакетный менеджер (`qvalent.toml`) | `pip` |
 
-Все четыре собираются из одних исходников (`CMakeLists.txt` → `BACKEND_SOURCES`); `qlisp-lsp` — отдельная цель только из `src/lsp/server.cpp` (без LLVM-зависимости).
+Отдельного компилятора (`qlispc`) больше нет: с v2.4.0 интерпретатор и JIT живут в одном бинарнике `qlisp` — это следствие «инварианта одной формы» (гл. 1.3, 20). Все три инструмента собираются из одних исходников; `qlisp-lsp` — отдельная цель только из `src/lsp/server.cpp`.
 
 ## 2.3 REPL
 
@@ -100,25 +98,25 @@ Hello, QLISP!
 
 `(import M)` возвращает `"m-loaded"` и гарантирует, что модуль загружен однократно. Для частичного импорта: `(import-from (dl linear train-step))` поднимает только указанные имена.
 
-## 2.6 Компиляция
+## 2.6 JIT: когда нужен нативный код
 
-`qlispc` компилирует файл в LLVM IR, а затем (по умолчанию) в нативный бинарник:
+Отдельного компилятора в духе `nuitka` в QLISP нет — вместо него нативный код рождается **внутри работающего процесса**. Горячее замыкание компилируется в нативную RX-страницу методом copy-and-patch одним вызовом:
 
-```bash
-# Нативный бинарник (LLVM IR → llc → .s → g++ -shared → dlopen)
-qlispc hello.qlsp -o hello
-
-# Только LLVM IR
-qlispc compile --llvm hello.qlsp -o hello.ll
+```lisp
+(defun add (a b) (+ a b))
+(setq add (JIT add))    ;; скомпилировать тело в нативную страницу
+(add 2 3)               ;; → 5 — исполняется нативный код
 ```
 
-Полученный `hello` — самодостаточная программа, запускается без интерпретатора. Линковка идёт с `libqlisp_tensor_runtime.a` (тензорный рантайм, AVX2/FMA/OpenBLAS/OpenMP) и `libqlisp_runtime.a` (C-рантайм для AOT-линковки).
+`(JIT f)` возвращает обёртку-программу, внутри которой живёт нативная страница, а оригинальное S-выражение — **мастер-копия**: её можно в любой момент выбросить (`DISCARD-JIT`) и поведение не изменится, потому что страница — лишь кэш (гл. 20). Тензорный код компилируется через HLO-пайплайн тем же принципом (гл. 10).
 
-> 🐍 **Python-аналогия.** `qlispc file.qlsp -o prog` ≈ `nuitka --onefile file.py`. А HLO-компиляция тензорных функций (гл. 10) ≈ `torch.compile`, только путь — AOT через `llc` + `g++ -shared` + `dlopen`.
+> 🐍 **Python-аналогия.** Это роль, которую в Python играет CPython 3.13 JIT — тоже copy-and-patch, тоже без IR в рантайме, — только в QLISP компилируются не байткод-хот-циклы, а замыкания языка целиком, и результатом управляет сам программист.
+
+Если нужен «самодостаточный бинарник» — сохраните образ мира (`SAVE-IMAGE`, гл. 21) и загрузите его в `qlisp` на целевой машине: S-выражения и тензоры переедут, нативные страницы пересоберутся лениво при первом вызове.
 
 ## 2.7 Редактор и LSP
 
-`qlisp-lsp` — Language Server без внешних зависимостей (JSON-парсер встроен, движок и LLVM не линкуются). Начиная с v2.3.8 это полноценный сервер:
+`qlisp-lsp` — Language Server без внешних зависимостей (JSON-парсер встроен, компиляторный движок не линкуется). Начиная с v2.3.8 это полноценный сервер:
 
 - **Диагностики**: незакрытая форма (с позицией открывающей скобки), лишняя `)`, незакрытая строка — точные диапазоны, инкрементальная синхронизация документа (`change: 2`).
 - **Навигация**: goto-definition (в т.ч. cross-file), references, documentHighlight, rename по всему воркспейсу, `workspace/symbol`, `documentSymbol` (14 def-видов: `defun`/`defmacro`/`defvar`/`defhloop`/… + `deftest`).
@@ -159,6 +157,6 @@ qlispc compile --llvm hello.qlsp -o hello.ll
 
 - Синтаксис языка целиком — глава 3.
 - Тензоры и автоград — главы 6–7.
-- HLO-компиляция в нативный код — глава 10.
+- HLO-стенсил-компиляция — глава 10, JIT замыканий — глава 20, образы — глава 21.
 - Нейросимвольный слой — глава 14.
 - Шпаргалка «QLISP ↔ Python» — глава 18.

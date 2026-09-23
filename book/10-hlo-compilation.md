@@ -1,35 +1,31 @@
 # Глава 10. HLO-компиляция: от интерпретации к машинному коду
 
-HLO-пайплайн — killer feature QLISP: ваш тензорный код трассируется в граф, оптимизируется и компилируется в **нативный машинный код** через LLVM. Это собственная реализация идей XLA/torch.compile.
+HLO-пайплайн — killer feature QLISP: ваш тензорный код трассируется в граф, оптимизируется и компилируется в **нативный машинный код** собственным copy-and-patch стенсил-эмиттером — без LLVM, без промежуточного IR и без дискового кэша. Это собственная реализация идей XLA/torch.compile.
+
+> 📌 **Пайплайн v2.7.0** (срез H3): единый эмиттер `compile_hlo_stencil` — один проход по графу, байтовые AVX2-стенсилы с «дырками» патчатся в W^X-страницу процесса. Прежний путь «LLVM IR → объектник → lldELF → .so → dlopen» полностью удалён вместе с дисковым кэшем.
 
 ## 10.1 Идея
 
 ```text
 Код QLISP → трассировка в HLO-граф (START-TRACE … HLO-COMPILE)
            → оптимизации (CSE, DCE, fusion, broadcast-shape, COMPOSITE-expansion)
-           → LLVM IR → object file → lldELF → .so → dlopen → нативное исполнение
+           → compile_hlo_stencil: один проход по графу
+           → байтовые AVX2-стенсилы с «дырками» → патч → W^X-страница процесса
+           → нативное исполнение
 ```
 
-С **v2.3.0** компиляция HLO-кернелов **полностью in-process** (коммит `ef4994e`): LLVM-эмит и линковка LLD происходят в самом процессе qlisp. Для Linux-линковки используется **in-process `lldELF`** (детект через CMake, `QLISP_HAS_LLD`). Пайплайн:
-
-```text
-HloGraph → LLVM IR (TargetMachine::emit) → object (.o)
-        → in-process lldELF → .so
-        → dlopen → нативный HLOPROG
-```
-
-До v2.3.0 путь был через `popen("llc … && g++ -shared …")` — теперь это fallback, если `lld` не подключена при сборке. In-process версия быстрее (нет fork/exec на каждый кёрнел) и надёжнее (нет проблем с PATH/shell-эскейпингом на Windows).
+С **v2.7.0** у HLO один эмиттер — `compile_hlo_stencil`. Он идёт по графу один раз и выписывает готовые x86-64 (AVX2) последовательности байт, оставляя «дырки» — imm-формы, rel32-мишени, movabs-адреса хелперов, — которые тут же патчатся, и копирует результат в W^X-страницу процесса. Сигнатура кернела: `void fn(float** params, float* out)`; узел `DOT` превращается в `call cblas_sgemm` (адрес прошивается movabs-патчем). Промежуточного IR нет вовсе — тот же принцип «инварианта одной формы», что и у JIT замыканий (гл. 20), только стенсилы тензорные.
 
 - **CSE** — устранение общих подвыражений (`HloGraph::eliminate_common_subexpressions`).
 - **DCE** — удаление мёртвого кода (`HloGraph::eliminate_dead_code`).
 - **Fusion** — цепочки поэлементных операций (ADD→MUL→RELU) сливаются в **один кирнел** (`HloGraph::fuse_elementwise_ops`).
 - **COMPOSITE-expansion** — `defhloop`-узлы разворачиваются в mini-граф (`composite_expanded` флаг защищает от двойного разворачивания).
 - **Broadcast-shape** — `add`/`mul` вычисляют numpy-style broadcast shape (right-aligned, dim=1 broadcasts), а не форму левого операнда.
-- **BLAS** — узлы `DOT` (матричное умножение) вызывают `cblas_sgemm` через external LLVM declaration.
-- **Кэш** — диск в `/tmp/qlisp_hlo_cache/` с versioned fingerprint (`HloCodeGen::cache_` + `cache_dir()`). Повторные запуски не перекомпилируются. С v2.3.6 fingerprint маршрута включает branch-подграфы и метки — графы с одинаковым плоским скелетом, но разными ветвями, больше не делят запись кэша.
-- **In-process LLD** — компилятор линкует .so через `lld::elf::link` (без `system("ld ...")`). Требует линковки `lld` + `zlib` + `zstd` (Debian-style линкеры требуют явный `-lz -lzstd`; CI обновлён: `lld-22 liblld-22-dev`).
+- **BLAS** — узлы `DOT` (матричное умножение) вызывают `cblas_sgemm`: адрес функции прошивается в стенсил movabs-патчем.
+- **Кэш** — in-process, по fingerprint (версия эмиттера + shape-ключ): повторные компиляции одного графа в рамках процесса не перекомпилируются. С v2.3.6 fingerprint маршрута включает branch-подграфы и метки — графы с одинаковым плоским скелетом, но разными ветвями, не делят запись кэша. Дисковый кэш удалён вместе с LLVM-путём (v2.7.0).
+- **W^X** — страницы выделяет `platform::page_alloc` / `page_protect_exec`; страницы живут до конца процесса и после установки не изменяются.
 
-> 🐍 **Python-аналогия.** `torch.compile(model)` / `jax.jit(f)` — те же три этапа: трассировка, оптимизация, кодоген. Разница: в QLISP это встроено в язык и работает на S-выражениях, а не на байткоде Python. С v2.3.0 — никакого `subprocess.run(["llc", ...])` в горячем пути.
+> 🐍 **Python-аналогия.** `torch.compile(model)` / `jax.jit(f)` — те же три этапа: трассировка, оптимизация, кодоген. Разница: в QLISP это встроено в язык, кодоген — собственные стенсилы без IR (как у CPython 3.13 JIT, только для тензорных кернелов и с AVX2-векторизацией), и всё работает на S-выражениях.
 
 ## 10.2 Граф и его узлы
 
@@ -59,6 +55,8 @@ struct HloNode {
 
 `HloGraph` владеет всеми узлами, поддерживает `entry()`, `dump()`, `clone()` (глубокое копирование для fallback-интерпретации), `fingerprint()` (для кэша), `optimize()` (CSE+DCE+fusion+DCE). У `ROUTE`-ноды (v2.3.5) внутри живут branch-подграфы, OR-overlap-метки и per-sample taken; clone/merge_subgraph переведены на pointer-identity maps, чтобы кросс-графовые ссылки на ветви переносились корректно, а DCE держит branch-ноды живыми и CSE их не подменяет и не сливает ROUTE-ноды между собой.
 
+Результат компиляции — программа с тегом `HLOPROG`: если граф прошёл через стенсил-эмиттер, она несёт нативный указатель с флагом `is_stencil`; если граф вне компилируемого подмножества (см. §10.12) — fallback-программу, которую исполняет интерпретатор графа.
+
 ## 10.3 Ручная трассировка: базовый workflow
 
 Примитивы (`src/eval/interpreter.cpp::register_primitives`):
@@ -84,6 +82,13 @@ struct HloNode {
 (defvar result (HLO-RUN hlo x w b))
 ```
 
+Интроспекция скомпилированной программы (v2.7.0):
+
+```lisp
+(HLO-STENCIL-P hlo)   ;; → T: кернел построен стенсил-эмиттером (нативная страница)
+(HLO-HAS-RANGE hlo)   ;; → T: у поэлементного графа есть range-вход (§10.6)
+```
+
 > 🐍 Аналог:
 > ```python
 > @torch.compile
@@ -96,7 +101,7 @@ struct HloNode {
 
 - Внутри `(START-TRACE)` … `(STOP-TRACE)` операции строят граф вместо вычисления.
 - Вне трассировки те же операции считаются интерпретатором (с SIMD/BLAS).
-- `(HLO-RUN hlo ...)` выполняет скомпилированный граф; если AOT-компиляция (`llc → g++ -shared → dlopen`) не удалась — автоматический fallback на интерпретацию клонированного графа (`HloGraph::clone()` глубокое копирование — см. `TEMP_ISSUES.md` #23). С v2.3.7 `HLO-RUN` защищён arg-count guard: на нехватке аргументов — ошибка (fallback считает PARAMETER-ноды, native сверяет `hp->num_params`; лишние аргументы разрешены), а не SIGSEGV.
+- `(HLO-RUN hlo ...)` выполняет скомпилированный граф; если граф не прошёл стенсил-компиляцию (вне подмножества) — автоматический fallback на интерпретацию клонированного графа (`HloGraph::clone()` глубокое копирование — см. `TEMP_ISSUES.md` #23). С v2.3.7 `HLO-RUN` защищён arg-count guard: на нехватке аргументов — ошибка (fallback считает PARAMETER-ноды, native сверяет `hp->num_params`; лишние аргументы разрешены), а не SIGSEGV.
 
 Готовые HLO-примитивы (для построения графов без тензорных значений):
 
@@ -132,18 +137,15 @@ struct HloNode {
 
 ## 10.6 Range-путь HLO (многопоточный)
 
-`HloCodeGen::compile_to_fn` строит два варианта функции:
+Для поэлементных графов над параметрами стенсил-эмиттер строит **второй вход в той же странице** — range-кернел (срез H2, v2.6.2):
 
 ```cpp
-if (can_range) compile_to_fn(name + "_range", graph, module.get(), need_cblas, true);
+void fn_range(float** params, float* out, long start, long end)
 ```
 
-Range-функция: `void fn(float** params, float* output, i64 start, i64 end)` —
-- скалярный пролог (start → aligned),
-- векторный цикл (aligned → end), 8 элементов/итерация,
-- `!llvm.loop.parallel_accesses` metadata для авто-распараллеливания.
+Исполнение — `hlo_range_exec`: OpenMP-параллелизм, чанки кратны 8 (ширина AVX2-вектора), guarded хвост покрывает остаток. Range-путь включается автоматически при `out_numel >= 1 МиБ` — на меньших объёмах накладные расходы на многопоточный вызов не окупаются.
 
-Range_fn генерируется **только когда entry-нода — FUSION или RELU/ADD/MUL с PARAMETER-входами** (проверка в `compile()`, см. `AGENTS.md`). Для не-fused графов range_fn пропускается (non-range путь).
+Наличие range-входа проверяется интроспекцией: `(HLO-HAS-RANGE h)` → `T`.
 
 ## 10.7 ROUTE: нейросимвольная маршрутизация в графе (v2.3.5–2.3.6)
 
@@ -153,7 +155,7 @@ Range_fn генерируется **только когда entry-нода — F
 
 - **Forward**: decision logits (inputs[0]) выбирают одну из принадлежащих узлу branch-подграфов на каждый вызов; ветви, OR-overlap-метки и per-sample taken живут внутри узла; `resolve_correct` зеркалит `src/ns/route.hpp` (взятая ветка побеждает).
 - **NS-IF под трассировкой строит ROUTE-ноду**: каждая ветвь тела трассируется в собственный мини-граф (COMPOSITE-паттерн), константные результаты ветвей замораживаются как CONSTANT. Tape-путь и обучение через `NS-GRAD!` не изменились.
-- **Интерпретаторный fallback исполняет ROUTE** (`hlo_fallback_node`): per-sample argmax выбирает ветвь (taken[0] для смешанного батча — та же семантика forward, что у tape-роутера), вложенный ROUTE рекурсирует. Графы с ROUTE компилируются сразу в fallback-программу (LLVM-диспетчер отложен).
+- **Интерпретаторный fallback исполняет ROUTE** (`hlo_fallback_node`): per-sample argmax выбирает ветвь (taken[0] для смешанного батча — та же семантика forward, что у tape-роутера), вложенный ROUTE рекурсирует. Графы с ROUTE компилируются сразу в fallback-программу (диспетчеризация ROUTE стенсилами — в плане, `TODO.md`).
 
 ### `HLO-ROUTE-GRAD!` — backward внутри узла (коммит `ff6685a`)
 
@@ -210,25 +212,7 @@ Range_fn генерируется **только когда entry-нода — F
 
 Разбор целиком — в главе 17.
 
-## 10.10 Кросс-компиляция HLO
-
-HLO-граф целевой-агностичен: скомпилировать можно под любую платформу LLVM без пересборки QLISP:
-
-```bash
-QLISP_TARGET_TRIPLE=aarch64-linux-gnu QLISP_TARGET_CPU=cortex-a72 qlisp train.qlsp
-QLISP_TARGET_TRIPLE=arm64-apple-macos  QLISP_LLC=llc-arm64 QLISP_CXX=arm64-clang++ qlisp infer.qlsp
-```
-
-| Переменная | По умолчанию | Смысл |
-|---|---|---|
-| `QLISP_TARGET_TRIPLE` | host (пустая строка) | Целевой triple LLVM (`aarch64-linux-gnu`, `arm64-apple-macos`) |
-| `QLISP_TARGET_CPU` | `native` | Модель CPU для `-mcpu=` (`cortex-a72`, `apple-m1`, `znver4`) |
-| `QLISP_LLC` | `llc` | Путь к `llc` |
-| `QLISP_CXX` | `g++` | C++-компилятор для линковки `.so` |
-
-Эти переменные читаются через `platform::env_or` в `src/core/platform.hpp`.
-
-## 10.11 Когда использовать HLO
+## 10.10 Когда использовать HLO
 
 - **Инференс обученной модели** — главный сценарий: граф фиксирован, fusion даёт максимум.
 - **Горячие циклы обучения** — через `HLO-TRAIN-SGD` и `defuse!`-функции.
@@ -236,9 +220,11 @@ QLISP_TARGET_TRIPLE=arm64-apple-macos  QLISP_LLC=llc-arm64 QLISP_CXX=arm64-clang
 
 Практика: сначала `(defuse soft ...)`, и повышайте до `defuse!`, когда убедились, что тело трассируемое (только тензорные операции, без `print`, `if` по значениям тензоров и т.п.).
 
-## 10.12 Известные ограничения (TODO)
+## 10.11 Известные ограничения (TODO)
 
 - Произвольное переписывание графа из языка (`graph-node`/`graph-rewrite`) — в плане (`TODO.md` §1.2); база уже есть: `GRAPH-DATA`/`GRAPH-FROM-DATA` (2.3.7) и `GRAPH-RUN-PASSES` (CSE/DCE/Fusion из Lisp).
-- LLVM-диспетчер для ROUTE отложен до roadmap 1.2 — графы с ROUTE исполняются fallback-программой.
+- Диспетчеризация ROUTE стенсилами — в плане; графы с ROUTE исполняются fallback-программой.
+- Стенсилы пока только для AVX2 x86-64 (SysV): иных целевых платформ у эмиттера нет.
 - `composite_expanded` флаг защищает от двойного разворачивания; identity-COMPOSITE (тело = сам параметр) коллапсируется в PARAM.
-- Кэш использует `std::hash` для fingerprint — теоретические коллизии, <10⁻⁹ вероятность (`TEMP_ISSUES.md` #22); с 2.3.6 fingerprint включает branch-подграфы и метки.
+- Fingerprint in-process-кэша использует `std::hash` — теоретические коллизии, <10⁻⁹ вероятность (`TEMP_ISSUES.md` #22); с 2.3.6 fingerprint включает branch-подграфы и метки.
+- Тесты: `tests/hlo_stencils.qlsp`, `tests/hlo_stencil_range.qlsp` (стенсилы и range-кернелы), прежние `hlo_*.qlsp`.

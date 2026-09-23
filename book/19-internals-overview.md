@@ -1,6 +1,6 @@
 # Глава 19. Устройство компилятора
 
-Краткая экскурсия во внутренности QLISP v2.3.8. Полное описание — в `ARCHITECTURE.md` дерева разработки.
+Краткая экскурсия во внутренности QLISP v2.7.0 (серия v2.4–v2.7: удаление легаси-AOT, JIT copy-and-patch, образы, единый HLO-стенсил-эмиттер). Полное описание — в `ARCHITECTURE.md` дерева разработки.
 
 ## 19.1 Пайплайн
 
@@ -10,18 +10,21 @@
   → Interpreter::eval (special forms, применение функций, примитивы)
     → Tensor-операции → GradientTape (запись autograd)
     → GradientTape::backward (reverse-topo AD, blocked nodes для NS-IF)
+    → горячее замыкание → jit::compile_closure → copy-and-patch → RX-страница (гл. 20)
   → HloGraph (START-TRACE … HLO-COMPILE)
-    → HloCodeGen → LLVM IR → object → in-process lldELF → .so → dlopen (AOT, не OrcJIT)
+    → compile_hlo_stencil → AVX2-стенсилы → W^X-страница (гл. 10)
     → NS-router (NS-IF/NS-GRAD! → per-sample routing + guilt detector; ROUTE-нода в HLO)
                      ↓
                 LSP Server ←→ Editor
 ```
 
+**Инвариант одной формы (v2.4.0).** S-выражение — единственная авторитетная форма программы. Оба «компилятора» — JIT замыканий и HLO-стенсил-эмиттер — потребляют S-выражения (и трассированный HLO-граф, который сам round-trip-ится в S-выражение, §10.8) и строят нативные страницы одним проходом, без промежуточного IR и без LLVM. Нативный код — выбрасываемый кэш: `DISCARD-JIT` и инвалидация по эпохе макросов пересобирают его из master-копий без изменения поведения.
+
 ## 19.2 Структура исходников
 
 ```
 src/
-├── core/          Scope (HibLin), SExpr, Symbol, ConsCellPool, TensorBufferPool, StableMemory, simd.hpp (slab-ядра)
+├── core/          Scope (HibLin), SExpr, Symbol, ConsCellPool, TensorBufferPool, StableMemory, simd.hpp (slab-ядра), image.{hpp,cpp} (образы, гл. 21)
 ├── reader/        CharStream, Readtable
 ├── eval/          Interpreter (80+ примитивов), специальные формы
 ├── types/         Type, TypeChecker (постепенная типизация)
@@ -30,17 +33,18 @@ src/
 ├── tensor/        Tensor, GradientTape (F16/F32/F64/I32/I64/U8)
 ├── gpu/           Device (CPU активен; CUDA/ROCm в плане)
 ├── hlo/           HloGraph, HloNode, HloOp (вкл. ROUTE), оптимизации, fingerprint
-├── codegen/       CodeGen (top-level AOT), HloCodeGen (HLO→native AOT)
+├── jit/           stencils.hpp, copypatch.{hpp,cpp} — JIT замыканий (copy-and-patch, RX-страницы)
+├── codegen/       HloCodeGen: единый стенсил-эмиттер compile_hlo_stencil (W^X-страницы, гл. 10)
 ├── symbolic/      S1-S8 (match, unify, plist, defrule, amb, compiler-macros, defhloop)
 ├── ns/            RouteHop, Router, GuiltDetector (S9)
 ├── data/          foundation, qserde (.qsrd-сериализация)
 ├── ffi/           FFI-LOAD/CALL/IMPORT (dlopen + dlsym)
 ├── visual/        Dashboard (HTTP, TensorBoard-подобный)
-├── runtime/       qlisp.c, qlisp_tensor.cpp (C/C++-рантайм для AOT)
+├── bindings/      bind.hpp, stb_image.cpp (нативные хелперы биндингов)
 ├── qvalent/       qvalent CLI (пакетный менеджер)
-├── lsp/           server.cpp (только LSP, без LLVM)
+├── lsp/           server.cpp (только LSP, без движка)
 ├── stdlib/        *.qlsp → embedded_modules[] (через xxd -i)
-└── main.cpp       REPL/интерпретатор/AOT-компилятор
+└── main.cpp       REPL/интерпретатор (JIT встроен — отдельного компилятора нет)
 ```
 
 ## 19.3 Reader
@@ -68,7 +72,7 @@ src/
 ```cpp
 class SExpr {
     Tag tag_;       // NIL, CONS, SYMBOL, FIXNUM, FLONUM, STRING,
-                    // PRIMITIVE, CLOSURE, INSTANCE, TENSOR, HLOPROG
+                    // PRIMITIVE, CLOSURE, INSTANCE, TENSOR, HLOPROG, JITPROG
     union {         // tagged payload
         struct { SExpr *car_, *cdr_; } cons_;
         const Symbol *sym_;
@@ -77,7 +81,9 @@ class SExpr {
         struct { const char *data_; size_t len_; } string_;
         Tensor *tensor_;
         struct { SExpr *params_, *body_, *env_; } closure_;
-        void *compiled_fn_;  // HLOPROG (dlopen'd)
+        // HLOPROG: указатель на W^X-страницу (is_stencil) либо fallback-программа
+        // JITPROG (v2.5.0): нативная RX-страница + master-замыкание + эпоха + счётчик вызовов
+        struct { void *fn_ptr; bool is_stencil; SExpr *closure_; uint64_t epoch_, calls_; } native_;
     };
 };
 ```
@@ -165,23 +171,21 @@ class GradientTape {  // thread_local singleton
 
 Граф из узлов `HloOp` (см. `src/hlo/graph.hpp`): `PARAMETER, CONSTANT, DOT, ADD, MUL, RELU, FUSION, TUPLE, OUTPUT, LOOKUP, ARGMAX, SOFTMAX, COMPOSITE, CODEGEN, WEIGHTED_LOOKUP, ROUTE` (ROUTE — v2.3.5: branch-подграфы, OR-overlap-метки, per-sample taken внутри ноды; clone/merge на pointer-identity maps, DCE держит ветви живыми, CSE не сливает ROUTE-ноды).
 
-Оптимизации: CSE, DCE, fusion поэлементных цепочек, broadcast-shape, COMPOSITE-expansion. Кодоген (`src/codegen/hlo_codegen.cpp`): C-ABI-функция `hlo_fn(params, output)` → LLVM IR → object → `dlopen` (AOT, **не OrcJIT**).
+Оптимизации: CSE, DCE, fusion поэлементных цепочек, broadcast-shape, COMPOSITE-expansion. Кодоген (`src/codegen/hlo_codegen.cpp`): **единый стенсил-эмиттер** `compile_hlo_stencil` (v2.7.0) — один проход по графу выписывает байтовые AVX2-стенсилы с «дырками» (imm-формы, rel32, movabs-адреса хелперов), патчит их и копирует в W^X-страницу процесса. Кернел — C-ABI-функция `void fn(float** params, float* out)`; узел `DOT` → `call cblas_sgemm` (адрес прошивается movabs-патчем). Промежуточного IR нет — LLVM-путь (IR → объектник → lldELF → .so → dlopen) удалён в v2.7.0.
 
-С **v2.3.0** путь **полностью in-process** (коммит `ef4994e`): `TargetMachine::emit` → `lld::elf::link` → `dlopen`. Никакого `popen`/`system`. Детект наличия LLD через CMake (`QLISP_HAS_LLD`). Если LLD не подключена при сборке — fallback на shell-линковку `popen("llc … && g++ -shared …")`. Линкеры Debian-style требуют явный `-lz -lzstd`; CI обновлён: `lld-22 liblld-22-dev`.
+Кэш — in-process по fingerprint (версия эмиттера + shape-ключ; с v2.3.6 включает branch-подграфы и метки). Дискового кэша больше нет. Fallback: граф вне компилируемого подмножества → интерпретация клонированного графа (`HloGraph::clone()`); `HLO-RUN` с v2.3.7 защищён arg-count guard (ошибка вместо SIGSEGV).
 
-Кэш: `/tmp/qlisp_hlo_cache/` с versioned fingerprint (с v2.3.6 включает branch-подграфы и метки — графы с одинаковым скелетом, но разными ветвями, не делят запись кэша). Fallback: если AOT не удался — интерпретация клонированного графа (`HloGraph::clone()`); `HLO-RUN` с v2.3.7 защищён arg-count guard (ошибка вместо SIGSEGV).
+С v2.3.7 граф — данные: `GRAPH-DATA`/`GRAPH-FROM-DATA` (S-выражение с ROUTE-ветвями и константами, точный круговой рейс print→read→print) и `GRAPH-RUN-PASSES` (CSE/DCE/Fusion из Lisp); COMPOSITE-ноды ездят через данные и материализуются fallback-исполнителем. Range-кернел `fn_range(params, out, start, end)` строится в той же странице (v2.6.2) — см. §10.6.
 
-С v2.3.7 граф — данные: `GRAPH-DATA`/`GRAPH-FROM-DATA` (S-выражение с ROUTE-ветвями и константами, точный круговой рейс print→read→print) и `GRAPH-RUN-PASSES` (CSE/DCE/Fusion из Lisp); COMPOSITE-ноды ездят через данные и материализуются fallback-исполнителем.
+### Copy-and-Patch JIT (v2.5.0+, `src/jit/`)
 
-Range_fn генерируется только для полностью fused графов (entry=FUSION, или RELU/ADD/MUL с PARAMETER-входами).
+Горячие замыкания компилируются тем же методом — без IR и без LLVM; детали — гл. 20 и `src/jit/CODE.md`. Ключевые факты для экскурсии:
 
-### Pin LLVM по `llvm-config` (v2.3.0+, коммит `1bf13b4`)
-
-`find_package(LLVM)` в CMake теперь запинен к установке, на которую указывает `llvm-config` из PATH. Раньше был возможен ABI-микс (заголовочные файлы из одного LLVM, библиотеки — из другого) — приводил к крашам и неопределённому поведению. Теперь:
-
-- Сборка выбирает `llvm-config` из PATH (или `PATH=/opt/rocm/lib/llvm/bin:$PATH cmake ..`).
-- Include и lib берутся от одного LLVM (`llvm-config --includedir` + `llvm-config --libfiles`).
-- Это устраняет ABI-конфликты вроде `undefined reference to operator new(unsigned long)` при кросс-линковке host-LLVM с MinGW.
+- **ABI страницы**: `SExpr *entry(SExpr **argv, size_t argc, Interpreter *interp)`; локали — слоты `[rbp - 8*(slot+1)]` по 8 байт (boxed `SExpr*` или raw int64/double).
+- **Один проход по S-дереву**: инлайнятся `if`/`let`/`while`/`setq`/`progn`, арифметика и сравнения с двумя числовыми аргументами; всё остальное — `lookup_var` + `call_value`, поэтому рекурсия jit-to-jit работает.
+- **Bail-блок**: несовпадение типа или неизвестная ситуация → возврат bail-токена → интерпретатор повторяет тело по master-копии (transaction-retry). Хук — `Interpreter::apply` (case `JITPROG`).
+- **Эпоха и heal**: любое `defmacro`/`define-compiler-macro` → `jit::invalidate_all()` (все страницы сбрасываются); stale-обёртка пересобирается после 64 интерпретируемых вызовов, засевая решётку типов наблюдаемой сигнатурой (`JIT-SIG`).
+- **Только SysV x86-64** — стенсилы выписаны руками под эту ABI (Win64/ARM64 — в плане).
 
 ## 19.10 Neuro-Symbolic Router
 
@@ -197,7 +201,7 @@ Range_fn генерируется только для полностью fused �
 
 ## 19.11 LSP
 
-`qlisp-lsp` (`src/lsp/server.cpp`, отдельная цель CMake без LLVM и без линковки движка) — с v2.3.8 полноценный Language Server, автономный (JSON-RPC over stdio, встроенный JSON-парсер с честным анескейпингом `\n \t \r \b \f \uXXXX` — старый `json_get` терял `\n`, склеивая документ в одну строку):
+`qlisp-lsp` (`src/lsp/server.cpp`, отдельная цель CMake без линковки движка) — с v2.3.8 полноценный Language Server, автономный (JSON-RPC over stdio, встроенный JSON-парсер с честным анескейпингом `\n \t \r \b \f \uXXXX` — старый `json_get` терял `\n`, склеивая документ в одну строку):
 
 - **Ядро**: двухпроходный сканер S-форм, повторяющий конвенции ридера (строки с экранированием, `;`-комментарии, диспетч-макросы `#' #(` `#\`, quote/quasiquote/comma); инкрементальная синхронизация (`change: 2`) через офсетный сплайсинг — без перечитывания документа.
 - **Диагностики**: незакрытая форма (с позицией открывающей скобки), лишняя `)`, незакрытая строка — точные диапазоны.
@@ -210,38 +214,35 @@ Range_fn генерируется только для полностью fused �
 ## 19.12 Сборка и инструменты
 
 ```bash
-# Native Linux
-cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)
+# Native Linux (LLVM не нужен)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
 
-# Если LLVM в нестандартном месте (например, ROCm)
-PATH=/opt/rocm/lib/llvm/bin:$PATH cmake .. -DCMAKE_BUILD_TYPE=Release \
-  && PATH=/opt/rocm/lib/llvm/bin:$PATH make -j$(nproc)
-
-# Cross-compile qvalent/qlisp-lsp под Windows (qlisp/qlispc требуют нативной сборки MSYS2)
-PATH=/opt/rocm/lib/llvm/bin:$PATH cmake -B build-windows \
+# Кросс-компиляция qvalent/qlisp-lsp под Windows из Linux
+# (для qlisp корректный путь — нативная MSYS2-сборка)
+cmake -B build-windows \
   -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-w64-mingw32.cmake \
   -DCMAKE_BUILD_TYPE=Release
 ```
 
 Продукты сборки (из `CMakeLists.txt`):
 
-- `qlisp` — REPL/интерпретатор (с LLVM, OpenBLAS, OpenMP, in-process LLD).
-- `qlispc` — AOT-компилятор (те же исходники).
-- `qlisp-lsp` — LSP-сервер (только `src/lsp/server.cpp`, без LLVM).
+- `qlisp` — REPL/интерпретатор + встроенный JIT (OpenBLAS, OpenMP; LLVM не нужен).
+- `qlisp-lsp` — LSP-сервер (только `src/lsp/server.cpp`).
 - `qvalent` — пакетный менеджер (только `src/qvalent/main.cpp`).
-- `libqlisp_runtime.a` — C-рантайм для AOT-линковки.
-- `libqlisp_tensor_runtime.a` — тензорный рантайм (C++: AVX2/FMA + cblas_sgemm).
+
+Отдельного AOT-компилятора (`qlispc`) и библиотек `libqlisp_runtime.a`/`libqlisp_tensor_runtime.a` больше нет — всё нативное строится на лету из S-выражений (v2.4.0).
 
 Модули stdlib вшиваются в бинарник на этапе сборки (`cmake/stdlib_embed.cmake`, через `cmake/gen_stdlib_header.cmake` — без `xxd` для переносимости на MSYS2/MinGW) — поэтому дистрибутив QLISP — один файл ~2 МБ.
 
 ### Windows-сборка
 
-Локальная кросс-компиляция `qlisp`/`qlispc` из Linux **невозможна** для v2.3.0: host-LLVM (например, rocm `libLLVM*.a`) собран с SysV ABI, а MinGW — с Win64 ABI; объектные файлы принципиально несовместимы (`undefined reference to operator new(unsigned long)`, `multiple definition std::_Sp_make_shared_tag` и т.п.). Кросс-путь в CMake оставлен **только для `qlisp-lsp` и `qvalent`** (без LLVM, работает; добавлены шимы заголовков `uid_t/gid_t/nlink_t`).
+С v2.7.1 Windows-сборка полностью портируема (mingw-портируемость: коллизии enum, guard BLAS-линковки, native DOT) — CI зелёный на Linux и Windows.
 
 Корректные пути для Windows-бинарника:
 
-1. **CI** (`.github/workflows/build.yml`, job `windows`): MSYS2 MinGW64 + LLVM/OpenBLAS нативно под Win64 ABI. Публикация релиза автоматическая при пуше тега (`git tag vX.Y.Z && git push origin main vX.Y.Z`); артефакты CI переиздаются в релизах документационного репозитория.
-2. **MSYS2 локально**: установить `mingw-w64-x86_64-llvm`/`mingw-w64-x86_64-clang`/`mingw-w64-x86_64-openblas`, затем `cmake -G "MinGW Makefiles" .. && make -j$(nproc)`.
+1. **CI** (`.github/workflows/build.yml`, job `windows`): MSYS2 MinGW64 + OpenBLAS нативно под Win64 ABI. Публикация релиза автоматическая при пуше тега (`git tag vX.Y.Z && git push origin main vX.Y.Z`); артефакты CI переиздаются в релизах документационного репозитория.
+2. **MSYS2 локально**: установить `mingw-w64-x86_64-gcc`/`mingw-w64-x86_64-openblas`, затем `cmake -G "MinGW Makefiles" -S . -B build && cmake --build build -j`.
+3. **Кросс-компиляция `qlisp-lsp`/`qvalent` из Linux** через toolchain-файл (см. выше).
 
 ## 19.13 Ключевые константы
 
@@ -252,12 +253,13 @@ PATH=/opt/rocm/lib/llvm/bin:$PATH cmake -B build-windows \
 | TensorBufferPool | exact-size, лимит 1 ГБ |
 | SIMD (AVX2/FMA) | 8×f32 = 256 бит |
 | SIMD (NEON) | 4×f32 = 128 бит |
-| Кэш HLO | `/tmp/qlisp_hlo_cache/` (in-process LLD, v2.3.0+) |
+| Кэш HLO | in-process fingerprint (версия эмиттера + shape-ключ); дисковый кэш удалён (v2.7.0) |
+| Порог heal JIT | 64 интерпретируемых вызова (`k_hot_calls`, гл. 20) |
 | Модули stdlib вшито | 11 (core string dl ml io regex audio datetime pkg errors visual) |
 | `dl` v2 | слои-как-данные, ~100 строк, `linear`/`net-forward`/`train-step`/`train-epochs` |
 | Автодополнения LSP | 150+ |
-| LLVM (минимум) | 22+ (с `lld` для in-process AOT) |
-| GCC/Clang (минимум) | GCC 13+ / Clang 16+ (C++20) |
+| Стенсилы JIT | SysV x86-64 (Win64/ARM64 — в плане) |
+| GCC/Clang (минимум) | GCC 13+ / Clang 16+ (C++20); LLVM не нужен |
 | qvalent локальный каталог | `./qlisp-packages/<name>/` |
 | qvalent кэш | `$HOME/.cache/qlisp/<deployer>/<repo>/` |
 | QSRD v2 magic | `"QSRD"` (u16 ver) |
@@ -267,13 +269,16 @@ PATH=/opt/rocm/lib/llvm/bin:$PATH cmake -B build-windows \
 ## 19.14 Известные ограничения (см. TEMP_ISSUES.md и TODO.md)
 
 - **CUDA** (`src/gpu/kernels.cu`) не зарегистрирован и не тестирован.
-- **HLO-AOT** через `popen` (не OrcJIT) — fallback, если LLD не подключена при сборке. С v2.3.0 по умолчанию **in-process LLD** (`ef4994e`).
+- **JIT-стенсилы** — только SysV x86-64; небольшое подмножество форм; `MACROLET`-тела не компилируются; bail = повтор тела интерпретатором (transaction-retry, гл. 20.7).
+- **Диспетчеризация ROUTE стенсилами** — в плане; ROUTE исполняется fallback-программой (сама ROUTE-нода и её backward `HLO-ROUTE-GRAD!` реализованы в 2.3.5–2.3.6).
 - **EnvFrame** использует C++ `std::map` — будет переписан на SExpr-alist в Phase 12.
 - **`Tensor::is_stable`** и **`Tensor::size_bytes`** пока не реализованы.
 - **Произвольное переписывание графа** (`graph-node`/`graph-rewrite`) — в плане; база готова: `GRAPH-DATA`/`GRAPH-FROM-DATA`/`GRAPH-RUN-PASSES` (v2.3.7).
-- **LLVM-диспетчер для ROUTE** — отложен (roadmap 1.2); ROUTE исполняется fallback-программой (сама ROUTE-нода и её backward `HLO-ROUTE-GRAD!` реализованы в 2.3.5–2.3.6).
 - **HLO fallback-граф (без `HLO-COMPILE`)** — держит константы формы трассировки, кросс-форменное использование небезопасно (`TEMP_ISSUES` #23).
-- **Кросс-компиляция `qlisp`/`qlispc` под Windows из Linux** — невозможна (ABI-mix SysV/Win64). Используйте CI или MSYS2.
-- **Семантические диагностики LSP** (unbound vars, арность), semantic tokens, signatureHelp — roadmap 2.3.9+.
+- **Семантические диагностики LSP** (unbound vars, арность), semantic tokens, signatureHelp — roadmap.
 - **CI** — GitHub Actions (`build.yml`) на Linux и Windows; тесты — `.qlsp`-скрипты в `test/` (standalone) и `tests/` (`deftest`/`run-tests`); артефакты CI публикуются как релизные бинарники.
 - Исторические фейлы ранних 2.3.x (`ns-nested-breed-guilty`, `neurosym-rule-check`) устранены в 2.3.1–2.3.2 (см. гл. 7.8 и 14.4).
+
+---
+
+Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы). Тесты — 64 сюита в `tests/`, включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_range.qlsp`, `homoiconic.qlsp`.

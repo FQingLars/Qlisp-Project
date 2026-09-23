@@ -15,6 +15,10 @@
 | `(function-env 'f)` | `f.__closure__` |
 | `(symbol-name 'x)` | `str(x)` (но для имён) |
 | `(boundp 'x)` | `'x' in globals()` |
+| `(jit f)` / `(setq f (jit f))` | CPython 3.13 JIT (copy-and-patch, тоже без IR в рантайме) — гл. 20 |
+| `(jit-sig f)` / `(jit-stale-p f)` | (нет аналога) — наблюдаемые типы параметров JIT |
+| `(save-image "w.qimg")` / `(load-image ...)` | `pickle(globals())` + `torch.save` в одном файле — гл. 21 |
+| `(discard-jit)` | (нет аналога) — сброс всех нативных страниц, поведение не меняется |
 | `(set-reader-macro '!' f)` | (нет аналога) |
 | `(randint 5 10)` | `random.randint(5, 10)` |
 | `(import-from (ml a b))` | `from ml import a, b` |
@@ -214,14 +218,14 @@
 
 | QLISP | Python-мир |
 |---|---|
-| `qlispc prog.qlsp -o prog` | `nuitka --onefile prog.py` |
+| `(setq f (jit f))` | CPython 3.13 JIT — copy-and-patch нативной страницы из S-выражения (без IR) |
 | `(start-trace)` + `(graph-param x)` + `(hlo-compile out)` + `(hlo-run hlo x ...)` | `torch.compile` / `jax.jit` |
 | `(defuse! f (x) ...)` | `@torch.compile(fullgraph=True)` |
 | `(defuse f (x) ...)` | `@torch.compile` (с fallback) |
 | `(graph-data prog)` / `(graph-from-data d)` | `torch.fx` граф как данные + pickle |
 | `(graph-run-passes prog '("cse" "dce" "fusion"))` | прогон оптимизационных проходов |
 | `(hlo-route-grad! prog labels)` | backward обучаемой ROUTE-ноды без ленты |
-| `QLISP_TARGET_TRIPLE=aarch64-linux-gnu` | кросс-компиляция под ARM |
+| `(hlo-stencil-p h)` / `(hlo-has-range h)` | интроспекция скомпилированного кёрнела |
 
 ## 18.10 FFI
 

@@ -13,7 +13,7 @@ QLISP — это диалект Лиспа, интерпретатор и JIT-к
 | Глава | Тема | Python-аналог |
 |-------|------|---------------|
 | [01. Введение](book/01-introduction.md) | Зачем нужен QLISP, философия, пайплайн | «Почему не Python?» |
-| [02. Начало работы](book/02-getting-started.md) | Установка, REPL, первая программа, компиляция | `python`, `pip` |
+| [02. Начало работы](book/02-getting-started.md) | Установка, REPL, первая программа, JIT | `python`, `pip` |
 | [03. Основы языка](book/03-language-basics.md) | S-выражения, функции, гомоиконность (`EVAL`, `FUNCTION-BODY`) | синтаксис, `def`, `lambda`, `ast` |
 | [04. Система типов](book/04-type-system.md) | Постепенная типизация, линейные типы тензоров | type hints, mypy |
 | [05. Модель памяти](book/05-memory-model.md) | HibLin: scratch/stable, пулы, Scope, `defvar`, `reset_scratch` | GC, `numpy` views |
@@ -21,7 +21,7 @@ QLISP — это диалект Лиспа, интерпретатор и JIT-к
 | [07. Автоградиент](book/07-autograd.md) | Лента градиентов, `!`-операции, SGD/Adam, контракт tape между формами | `torch.autograd` |
 | [08. Глубокое обучение](book/08-deep-learning.md) | Модуль DL v2: слои-как-данные, `net-forward`/`train-step`/`train-epochs` | `torch.nn` |
 | [09. Классический ML](book/09-classic-ml.md) | KNN, деревья, ансамбли, метрики, CV, grid search | scikit-learn |
-| [10. HLO-компиляция](book/10-hlo-compilation.md) | In-process AOT: LLVM emit → object → lldELF → dlopen | `torch.compile`, XLA |
+| [10. HLO-компиляция](book/10-hlo-compilation.md) | Стенсил-эмиттер: трассировка → CSE/DCE/fusion → copy-and-patch на W^X-страницах (без LLVM) | `torch.compile`, XLA |
 | [11. GPU](book/11-gpu.md) | Устройства, статус CUDA-бэкенда | `.to('cuda')` |
 | [12. Макросы](book/12-macros.md) | Код-как-данные, backquote, compiler macros, `EVAL`/`READ-FROM-STRING` | декораторы, метаклассы |
 | [13. ООП](book/13-oop.md) | defstruct, defclass, дженерики (CLOS) | `class`, `@dataclass` |
@@ -30,7 +30,9 @@ QLISP — это диалект Лиспа, интерпретатор и JIT-к
 | [16. Пакеты и FFI](book/16-packages-and-ffi.md) | qvalent, pkg-install, FFI: dlopen+FFI-CALL/IMPORT | `pip`, `ctypes` |
 | [17. Разбор примеров](book/17-full-examples.md) | Линейная регрессия и XOR-MLP с Python-эквивалентами | end-to-end туториалы |
 | [18. Шпаргалка](book/18-python-cheatsheet.md) | QLISP ↔ Python/NumPy/PyTorch/sklearn | справочник |
-| [19. Устройство компилятора](book/19-internals-overview.md) | Reader, интерпретатор, HibLin, codegen, LSP, NS-router | CPython internals |
+| [19. Устройство компилятора](book/19-internals-overview.md) | Reader, интерпретатор, HibLin, JIT, стенсилы, LSP | CPython internals |
+| [20. JIT-компиляция](book/20-jit.md) | Copy-and-patch: RX-страницы из S-выражений, решётка типов, специализация, инвалидация | CPython 3.13 JIT |
+| [21. Образы](book/21-images.md) | `SAVE-IMAGE`/`LOAD-IMAGE`: мир как данные, формат QLSI | `pickle` + `torch.save` |
 
 ## Быстрый старт
 
