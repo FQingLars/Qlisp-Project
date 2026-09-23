@@ -1,6 +1,6 @@
 # Глава 19. Устройство компилятора
 
-Краткая экскурсия во внутренности QLISP v2.7.0 (серия v2.4–v2.7: удаление легаси-AOT, JIT copy-and-patch, образы, единый HLO-стенсил-эмиттер). Полное описание — в `ARCHITECTURE.md` дерева разработки.
+Краткая экскурсия во внутренности QLISP v2.7.2 (серия v2.4–v2.7: удаление легаси-AOT, JIT copy-and-patch, образы, единый HLO-стенсил-эмиттер, модуль Tablet). Полное описание — в `ARCHITECTURE.md` дерева разработки.
 
 ## 19.1 Пайплайн
 
@@ -255,7 +255,7 @@ cmake -B build-windows \
 | SIMD (NEON) | 4×f32 = 128 бит |
 | Кэш HLO | in-process fingerprint (версия эмиттера + shape-ключ); дисковый кэш удалён (v2.7.0) |
 | Порог heal JIT | 64 интерпретируемых вызова (`k_hot_calls`, гл. 20) |
-| Модули stdlib вшито | 11 (core string dl ml io regex audio datetime pkg errors visual) |
+| Модули stdlib вшито | 13 (core string dl ns ml io regex audio datetime pkg errors visual tablet) |
 | `dl` v2 | слои-как-данные, ~100 строк, `linear`/`net-forward`/`train-step`/`train-epochs` |
 | Автодополнения LSP | 150+ |
 | Стенсилы JIT | SysV x86-64 (Win64/ARM64 — в плане) |
@@ -282,4 +282,4 @@ cmake -B build-windows \
 
 ---
 
-Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы). Тесты — 63 сюита в `tests/`, включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_range.qlsp`, `hlo_stencil_ops.qlsp`, `stdlib_losses.qlsp`, `homoiconic.qlsp`.
+Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы), гл. 22 (Tablet). Тесты — 64 сюита в `tests/`, включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_range.qlsp`, `hlo_stencil_ops.qlsp`, `stdlib_losses.qlsp`, `tablet.qlsp` (156 проверок), `homoiconic.qlsp`.

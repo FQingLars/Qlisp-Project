@@ -56,7 +56,7 @@ Enter expressions, press Ctrl+D to exit.
 => 16.0
 ```
 
-REPL при старте **автоматически загружает все 11 модулей стандартной библиотеки** (см. `embedded_modules[]` в `src/main.cpp:26-38`): `core`, `string`, `dl`, `ml`, `io`, `regex`, `audio`, `datetime`, `pkg`, `errors`, `visual`. Они вшиты в бинарник через `cmake/stdlib_embed.cmake` (на этапе сборки `.qlsp` превращаются в `.h` через `cmake/gen_stdlib_header.cmake` и компилируются в бинарник). С v2.3.0 поддержан частичный импорт: `(import-from (ml knn-predict nb-fit))`.
+REPL при старте **автоматически загружает все 13 модулей стандартной библиотеки** (см. `embedded_modules[]` в `src/main.cpp`): `core`, `string`, `dl`, `ns`, `ml`, `io`, `regex`, `audio`, `datetime`, `pkg`, `errors`, `visual`, `tablet` (v2.7.2, гл. 22). Они вшиты в бинарник через `cmake/stdlib_embed.cmake` (на этапе сборки `.qlsp` превращаются в `.h` через `cmake/gen_stdlib_header.cmake` и компилируются в бинарник). С v2.3.0 поддержан частичный импорт: `(import-from (ml knn-predict nb-fit))`.
 
 > 🐍 **Python-аналогия.** Это как если бы `python` стартовал с предимпортированными `numpy`, `torch`, `sklearn`, `re`, `datetime`, `time`, `urllib`, `tensorboard`, `str`.
 
