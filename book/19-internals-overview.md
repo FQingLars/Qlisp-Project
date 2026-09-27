@@ -1,6 +1,6 @@
 # Глава 19. Устройство компилятора
 
-Краткая экскурсия во внутренности QLISP v2.7.2 (серия v2.4–v2.7: удаление легаси-AOT, JIT copy-and-patch, образы, единый HLO-стенсил-эмиттер, модуль Tablet). Полное описание — в `ARCHITECTURE.md` дерева разработки.
+Краткая экскурсия во внутренности QLISP v2.7.4 (серия v2.4–v2.7: удаление легаси-AOT, JIT copy-and-patch, образы, единый HLO-стенсил-эмиттер, модуль Tablet, HibLin OOM-фиксы и эвикция пулов). Полное описание — в `ARCHITECTURE.md` дерева разработки.
 
 ## 19.1 Пайплайн
 
@@ -122,9 +122,9 @@ Tensor: dtype (F16/F32/F64/I32/I64/U8), shape, strides, numel,
 - Поэлементные операции — SIMD: AVX2 (8×f32) на x86_64, NEON (4×f32) на ARM. С v2.3.3 — slab-ядра на raw pointers (`src/core/simd.hpp`: `sum_ps`/`max_ps`/`scale_ps`/`exp_ps` с полиномом AVX2), диспетчеризация по layout, одометр без аллокаций — sum-4096: 343ms → 4.7ms; тайловый transpose 64×64: 158ms → 4.8ms; векторизованный softmax + O(D) backward: 16.5ms → 0.40ms; memcpy-im2col conv2d: 107.8ms → 9.8ms.
 - `MATMUL` — `cblas_sgemm` (OpenBLAS); с v2.3.3 — флаги `atrans`/`btrans` (транспонирования внутри GEMM), backward-ноги и шаги SGD/ADAM — на сырых указателях (ag-matmul-1024 31ms < PyTorch 34ms; train-sgd/adam-mlp-64 1.14ms).
 - `reshape`/`transpose` — глубокие копии (views нет, гл. 4).
-- `TensorBufferPool`: exact-size free list — буфер выделяется ровно под размер тензора, при освобождении возвращается в список своего размера; лимит пула — 1 ГБ (настраивается).
+- `TensorBufferPool`: exact-size free list — буфер выделяется ровно под размер тензора, при освобождении возвращается в список своего размера; лимит пула — **256 МБ** (настраивается; в v2.7.4 понижен с 1 ГБ), при промахе точного размера на 3/4 лимита эвиктируется крупнейшая корзина free-list — иначе пул удерживал RSS за мёртвыми буферами (120k разных размеров: 1.13 ГБ → 52 МБ).
 - F16: `launch_*_half` через `_Float16` (F16C на x86_64); matmul аккумулирует во float.
-- `while` с v2.3.3: результат тела — в паре ping-pong scratch-скоупов (O(1) памяти на итерацию, в root продвигается один раз на выходе); утечки ловит soak-харнесс (`tests/memory_soak.qlsp` + `bench/leak_watch.py`, VmRSS по `/proc`).
+- `while` с v2.3.3: результат тела — в паре ping-pong scratch-скоупов (O(1) памяти на итерацию, в root продвигается один раз на выходе); утечки ловит soak-харнесс (`tests/memory_soak.qlsp` + `bench/leak_watch.py`, VmRSS по `/proc`). С v2.7.3 `setq` let-привязки, обновляемой в цикле, **re-home в loop store** (без promote-в-root на каждой итерации: 20k cons-setq — 12.5 ГБ OOM → пик 35 МБ), а un-backpropagated графы ленты сбрасываются на границе формы (30k форм без `GRAD!` — +494 МБ → пик 31.7 МБ).
 
 ## 19.8 Autograd
 
@@ -249,7 +249,8 @@ cmake -B build-windows \
 | Параметр | Значение |
 |---|---|
 | Блок scratch-Scope | 16 МБ (`DEFAULT_BLOCK_SIZE`) |
-| ConsCellPool | предвыделенный, `BLOCK_CELLS` ячеек за блок |
+| ConsCellPool | предвыделенный, 64k ячеек (~1.5 МБ) за блок (v2.7.4; бывшие блоки 1 М ячеек удерживали пик навсегда) |
+| Guard глубины (v2.7.4) | 10 000 eval-кадров; ловимая ошибка + `(EVAL-MAX-DEPTH n)`; RAII-декремент, eval жив после catch |
 | TensorBufferPool | exact-size, лимит 1 ГБ |
 | SIMD (AVX2/FMA) | 8×f32 = 256 бит |
 | SIMD (NEON) | 4×f32 = 128 бит |
@@ -263,7 +264,7 @@ cmake -B build-windows \
 | qvalent локальный каталог | `./qlisp-packages/<name>/` |
 | qvalent кэш | `$HOME/.cache/qlisp/<deployer>/<repo>/` |
 | QSRD v2 magic | `"QSRD"` (u16 ver) |
-| Тесты | сюит зелёный (Release, Linux); ASan чисто на HLO/NS/tape-путях; soak-харнесс без роста RSS |
+| Тесты | сюит зелёный (Release, Linux); ASan чисто на HLO/NS/tape-путях; soak-харнесс без роста RSS; production-чеки RSS v2.7.3–v2.7.4 (OOM-фиксы) |
 | Контракт CI (v2.7.1) | `run-tests` считает падения в `*test-failed*`; процесс возвращает 1 при любом упавшем сюите |
 | LSP | инкрементальный sync (change:2), cross-file def/refs/rename, folding, formatting (v2.3.8) |
 
@@ -282,4 +283,4 @@ cmake -B build-windows \
 
 ---
 
-Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы), гл. 22 (Tablet). Тесты — 64 сюита в `tests/`, включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_range.qlsp`, `hlo_stencil_ops.qlsp`, `stdlib_losses.qlsp`, `tablet.qlsp` (156 проверок), `homoiconic.qlsp`.
+Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы), гл. 22 (Tablet). Тесты — 67 сюитов в `tests/`, включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_ops.qlsp`, `stdlib_losses.qlsp`, `tablet.qlsp` (156 проверок), `memory_setq.qlsp`, `tape_autoclear.qlsp`, `memory_pools.qlsp`, `homoiconic.qlsp`.

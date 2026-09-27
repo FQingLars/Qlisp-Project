@@ -4,7 +4,7 @@
 
 | Модуль | Файл | Размер | Содержание |
 |---|---|---|---|
-| `core` | `stdlib/core.qlsp` | 94 строки | утилиты списков, `let*`, тестовый фреймворк |
+| `core` | `stdlib/core.qlsp` | 94 строки | утилиты списков (итеративные с v2.7.4: `length`/`reverse`/`member`/`last`/`butlast`/`nth` не жгут стек), `let*`, тестовый фреймворк |
 | `string` | `stdlib/string.qlsp` | (v2.3.0+) | строковые операции, char-коды, примитивы + композитные |
 | `ml` | `stdlib/ml.qlsp` | 377 строк | классический ML: KNN, NB, Tree, RF, GB, KMeans, CV, GridSearch, потери |
 | `dl` | `stdlib/dl.qlsp` | 100+ строк (v2.3.0+) | слои-как-данные, `linear`, `net-forward`, `train-step`, `train-epochs` |
