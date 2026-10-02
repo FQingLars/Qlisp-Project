@@ -167,6 +167,8 @@ class GradientTape {  // thread_local singleton
 
 8. **HLOPROG переживает promote (2.3.1, #29).** `clone_to` клонирует обёртку и делит compiled fn (живёт в кэше компилятора всё время процесса) — `defvar prog (HLO-COMPILE ...)` безопасен после сброса scratch.
 
+9. **HLOPROG part-time (v2.7.7–v2.8.0).** Компилированная программа владеет своими артефактами (sealed-константы в storage-скопе, клон графа, W^X-страница) и умирает на границе формы, если не привязана к имени; привязка (`defvar`/`setq` через promote) делает её бессмертной, а перепись имени по лесному правилу (v2.8.0) выпускает старое поддерево. Кэш стенсила — non-owning: drop стирает запись перед освобождением, поэтому мёртвая программа не возвращается из кэша. Аудитор `QLISP_AUDIT=1` ловит «второе бессмертие» и сирот якорного реестра на границе формы; CI-шаг `leak_watch` гоняет весь корпус под этим флагом. Подробно — гл. 5.5.
+
 ## 19.9 HLO-пайплайн
 
 Граф из узлов `HloOp` (см. `src/hlo/graph.hpp`): `PARAMETER, CONSTANT, DOT, ADD, MUL, RELU, FUSION, TUPLE, OUTPUT, LOOKUP, ARGMAX, SOFTMAX, COMPOSITE, CODEGEN, WEIGHTED_LOOKUP, ROUTE` (ROUTE — v2.3.5: branch-подграфы, OR-overlap-метки, per-sample taken внутри ноды; clone/merge на pointer-identity maps, DCE держит ветви живыми, CSE не сливает ROUTE-ноды).
@@ -283,4 +285,4 @@ cmake -B build-windows \
 
 ---
 
-Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы), гл. 22 (Tablet). Тесты — 67 сюитов в `tests/`, включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_ops.qlsp`, `stdlib_losses.qlsp`, `tablet.qlsp` (156 проверок), `memory_setq.qlsp`, `tape_autoclear.qlsp`, `memory_pools.qlsp`, `homoiconic.qlsp`.
+Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы), гл. 22 (Tablet). Тесты — 74 сюита в `tests/` (плюс 9 в `test/`), включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_ops.qlsp`, `stdlib_losses.qlsp`, `tablet.qlsp` (156 проверок), `memory_setq.qlsp`, `loop_lifetime.qlsp`, `tape_autoclear.qlsp`, `memory_pools.qlsp`, `plist_anchor.qlsp`, `production_mem.qlsp`, `homoiconic.qlsp`. Контракты времени жизни, выдержавшие production-чеки (v2.7.5–v2.8.1), разобраны отдельно в гл. 5.5.
