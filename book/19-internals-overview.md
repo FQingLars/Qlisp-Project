@@ -1,6 +1,6 @@
 # Глава 19. Устройство компилятора
 
-Краткая экскурсия во внутренности QLISP v2.7.4 (серия v2.4–v2.7: удаление легаси-AOT, JIT copy-and-patch, образы, единый HLO-стенсил-эмиттер, модуль Tablet, HibLin OOM-фиксы и эвикция пулов). Полное описание — в `ARCHITECTURE.md` дерева разработки.
+Краткая экскурсия во внутренности QLISP v2.8.1 (серия v2.4–v2.8: удаление легаси-AOT, JIT copy-and-patch, образы, единый HLO-стенсил-эмиттер, модуль Tablet, HibLin OOM-фиксы, эвикция пулов и контракты времени жизни — O(1) spine-append, loop store = граница формы, part-time HLO, лесное правило бессмертной зоны с аудитором). Полное описание — в `ARCHITECTURE.md` дерева разработки.
 
 ## 19.1 Пайплайн
 
@@ -266,7 +266,7 @@ cmake -B build-windows \
 | qvalent локальный каталог | `./qlisp-packages/<name>/` |
 | qvalent кэш | `$HOME/.cache/qlisp/<deployer>/<repo>/` |
 | QSRD v2 magic | `"QSRD"` (u16 ver) |
-| Тесты | сюит зелёный (Release, Linux); ASan чисто на HLO/NS/tape-путях; soak-харнесс без роста RSS; production-чеки RSS v2.7.3–v2.7.4 (OOM-фиксы) |
+| Тесты | сюит зелёный (Release, Linux); ASan чисто на HLO/NS/tape-путях; soak-харнесс без роста RSS; production-чеки RSS v2.7.3–v2.8.1; CI-шаг `leak_watch` гоняет корпус под `QLISP_AUDIT=1` |
 | Контракт CI (v2.7.1) | `run-tests` считает падения в `*test-failed*`; процесс возвращает 1 при любом упавшем сюите |
 | LSP | инкрементальный sync (change:2), cross-file def/refs/rename, folding, formatting (v2.3.8) |
 
