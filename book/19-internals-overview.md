@@ -1,6 +1,6 @@
 # Глава 19. Устройство компилятора
 
-Краткая экскурсия во внутренности QLISP v2.8.1 (серия v2.4–v2.8: удаление легаси-AOT, JIT copy-and-patch, образы, единый HLO-стенсил-эмиттер, модуль Tablet, HibLin OOM-фиксы, эвикция пулов и контракты времени жизни — O(1) spine-append, loop store = граница формы, part-time HLO, лесное правило бессмертной зоны с аудитором). Полное описание — в `ARCHITECTURE.md` дерева разработки.
+Краткая экскурсия во внутренности QLISP v2.8.2 (серия v2.4–v2.8: удаление легаси-AOT, JIT copy-and-patch, образы, единый HLO-стенсил-эмиттер, модуль Tablet, HibLin OOM-фиксы, эвикция пулов, контракты времени жизни, TCO, кэш раскрытия макросов и DEBUG-TRACE). Полное описание — в `ARCHITECTURE.md` дерева разработки.
 
 ## 19.1 Пайплайн
 
@@ -169,6 +169,12 @@ class GradientTape {  // thread_local singleton
 
 9. **HLOPROG part-time (v2.7.7–v2.8.0).** Компилированная программа владеет своими артефактами (sealed-константы в storage-скопе, клон графа, W^X-страница) и умирает на границе формы, если не привязана к имени; привязка (`defvar`/`setq` через promote) делает её бессмертной, а перепись имени по лесному правилу (v2.8.0) выпускает старое поддерево. Кэш стенсила — non-owning: drop стирает запись перед освобождением, поэтому мёртвая программа не возвращается из кэша. Аудитор `QLISP_AUDIT=1` ловит «второе бессмертие» и сирот якорного реестра на границе формы; CI-шаг `leak_watch` гоняет весь корпус под этим флагом. Подробно — гл. 5.5.
 
+10. **Tail-call optimization для self-хвостовых вызовов (v2.8.2).** Хвостовой вызов пере-биндит кадр (параметры копируются в heap-стор, итерация освобождается через `restore`) вместо роста стека. Гейт: при живых tape-узлах TCO для итерации выключается; `let`/`let*` разворачиваются в транполине до 8 уровней, глубже — обычный кадр. Замер: рекурсивные train-эпохи N=100/300/500 — было 34.8/51.2/67.5 МБ против плоского `while` ~25 МБ, стало 27.4 МБ плато.
+
+11. **Кэш раскрытия макросов (v2.8.2).** `MacroExpander` кэширует раскрытие на форму-источник (хит по контенту; запись держит root-клон источника), инвалидация на `defmacro*`/`SLOT-SET`; `macrolet`-протяжения — вне кэша. Это закрыло класс-A утечки scratch: `let*` в цикле на 200k итераций 217 МБ → 22.7 МБ (дифференциал к `let` схлопнулся).
+
+12. **DEBUG-TRACE (v2.8.2).** Кольцевой буфер на 4096 записей (`src/core/trace.{hpp,cpp}`) с категориями `scope/clone/anchor/expand/macro`; примитивы `DEBUG-TRACE`, `TRACE-STATS`, `TRACE-DUMP`, `TRACE-CLEAR`, env `QLISP_TRACE`. Выключенный трейс стоит один relaxed load, сам буфер не течёт. Точки эмиссии: `reset_scratch` (границы форм), `clone_to` (мост disposable→stable), take/release якорей, кэш раскрытия, `defmacro`/`defcompiler-macro`.
+
 ## 19.9 HLO-пайплайн
 
 Граф из узлов `HloOp` (см. `src/hlo/graph.hpp`): `PARAMETER, CONSTANT, DOT, ADD, MUL, RELU, FUSION, TUPLE, OUTPUT, LOOKUP, ARGMAX, SOFTMAX, COMPOSITE, CODEGEN, WEIGHTED_LOOKUP, ROUTE` (ROUTE — v2.3.5: branch-подграфы, OR-overlap-метки, per-sample taken внутри ноды; clone/merge на pointer-identity maps, DCE держит ветви живыми, CSE не сливает ROUTE-ноды).
@@ -253,6 +259,7 @@ cmake -B build-windows \
 | Блок scratch-Scope | 16 МБ (`DEFAULT_BLOCK_SIZE`) |
 | ConsCellPool | предвыделенный, 64k ячеек (~1.5 МБ) за блок (v2.7.4; бывшие блоки 1 М ячеек удерживали пик навсегда) |
 | Guard глубины (v2.7.4) | 10 000 eval-кадров; ловимая ошибка + `(EVAL-MAX-DEPTH n)`; RAII-декремент, eval жив после catch |
+| Кольцо DEBUG-TRACE (v2.8.2) | 4096 записей; категории `scope/clone/anchor/expand/macro`; выключено по умолчанию |
 | TensorBufferPool | exact-size, лимит 1 ГБ |
 | SIMD (AVX2/FMA) | 8×f32 = 256 бит |
 | SIMD (NEON) | 4×f32 = 128 бит |
@@ -267,6 +274,7 @@ cmake -B build-windows \
 | qvalent кэш | `$HOME/.cache/qlisp/<deployer>/<repo>/` |
 | QSRD v2 magic | `"QSRD"` (u16 ver) |
 | Тесты | сюит зелёный (Release, Linux); ASan чисто на HLO/NS/tape-путях; soak-харнесс без роста RSS; production-чеки RSS v2.7.3–v2.8.1; CI-шаг `leak_watch` гоняет корпус под `QLISP_AUDIT=1` |
+| Tail-call (v2.8.2) | self-хвост пере-биндит кадр; гейт по живым tape-узлам; `let`/`let*` разворачиваются до 8 уровней |
 | Контракт CI (v2.7.1) | `run-tests` считает падения в `*test-failed*`; процесс возвращает 1 при любом упавшем сюите |
 | LSP | инкрементальный sync (change:2), cross-file def/refs/rename, folding, formatting (v2.3.8) |
 
@@ -285,4 +293,4 @@ cmake -B build-windows \
 
 ---
 
-Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы), гл. 22 (Tablet). Тесты — 74 сюита в `tests/` (плюс 9 в `test/`), включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_ops.qlsp`, `stdlib_losses.qlsp`, `tablet.qlsp` (156 проверок), `memory_setq.qlsp`, `loop_lifetime.qlsp`, `tape_autoclear.qlsp`, `memory_pools.qlsp`, `plist_anchor.qlsp`, `production_mem.qlsp`, `homoiconic.qlsp`. Контракты времени жизни, выдержавшие production-чеки (v2.7.5–v2.8.1), разобраны отдельно в гл. 5.5.
+Подробности по подсистемам: гл. 10 (HLO-стенсилы), гл. 20 (JIT copy-and-patch), гл. 21 (образы), гл. 22 (Tablet). Тесты — 78 сюитов в `tests/` (плюс 9 в `test/`), включая `jit.qlsp`, `image.qlsp`, `hlo_stencils.qlsp`, `hlo_stencil_ops.qlsp`, `stdlib_losses.qlsp`, `tablet.qlsp` (156 проверок), `memory_setq.qlsp`, `loop_lifetime.qlsp`, `memory_pools.qlsp`, `plist_anchor.qlsp`, `production_mem.qlsp`, `expansion_cache.qlsp`, `debug_trace.qlsp`, `tail_call.qlsp` (18 проверок), `homoiconic.qlsp`. Контракты времени жизни (v2.7.5–v2.8.1) разобраны отдельно в гл. 5.5.
